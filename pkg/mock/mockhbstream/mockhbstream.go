@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/pdpb"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 )
@@ -46,10 +47,10 @@ func (s HeartbeatStream) Send(m core.RegionHeartbeatResponse) error {
 }
 
 // SendMsg is used to send the message.
-func (s HeartbeatStream) SendMsg(region *core.RegionInfo, msg *pdpb.RegionHeartbeatResponse) {}
+func (HeartbeatStream) SendMsg(*core.RegionInfo, *pdpb.RegionHeartbeatResponse) {}
 
 // BindStream mock method.
-func (s HeartbeatStream) BindStream(storeID uint64, stream hbstream.HeartbeatStream) {}
+func (HeartbeatStream) BindStream(uint64, hbstream.HeartbeatStream) {}
 
 // Recv mocks method.
 func (s HeartbeatStream) Recv() core.RegionHeartbeatResponse {

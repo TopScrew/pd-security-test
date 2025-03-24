@@ -19,9 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/statistics"
 	"github.com/tikv/pd/pkg/statistics/utils"
@@ -37,16 +39,17 @@ func TestHotRegionStorage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cluster, err := tests.NewTestCluster(ctx, 1,
-		func(cfg *config.Config, serverName string) {
+		func(cfg *config.Config, _ string) {
 			cfg.Schedule.HotRegionCacheHitsThreshold = 0
 			cfg.Schedule.HotRegionsWriteInterval.Duration = 1000 * time.Millisecond
 			cfg.Schedule.HotRegionsReservedDays = 1
 		},
 	)
 	re.NoError(err)
+	defer cluster.Destroy()
 	err = cluster.RunInitialServers()
 	re.NoError(err)
-	cluster.WaitLeader()
+	re.NotEmpty(cluster.WaitLeader())
 	stores := []*metapb.Store{
 		{
 			Id:            1,
@@ -65,7 +68,7 @@ func TestHotRegionStorage(t *testing.T) {
 	for _, store := range stores {
 		tests.MustPutStore(re, cluster, store)
 	}
-	defer cluster.Destroy()
+
 	startTime := time.Now().Unix()
 	tests.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"), core.SetWrittenBytes(3000000000),
 		core.SetReportInterval(uint64(startTime-utils.RegionHeartBeatReportInterval), uint64(startTime)))
@@ -145,16 +148,17 @@ func TestHotRegionStorageReservedDayConfigChange(t *testing.T) {
 	interval := 100 * time.Millisecond
 	defer cancel()
 	cluster, err := tests.NewTestCluster(ctx, 1,
-		func(cfg *config.Config, serverName string) {
+		func(cfg *config.Config, _ string) {
 			cfg.Schedule.HotRegionCacheHitsThreshold = 0
 			cfg.Schedule.HotRegionsWriteInterval.Duration = interval
 			cfg.Schedule.HotRegionsReservedDays = 1
 		},
 	)
 	re.NoError(err)
+	defer cluster.Destroy()
 	err = cluster.RunInitialServers()
 	re.NoError(err)
-	cluster.WaitLeader()
+	re.NotEmpty(cluster.WaitLeader())
 	stores := []*metapb.Store{
 		{
 			Id:            1,
@@ -173,7 +177,7 @@ func TestHotRegionStorageReservedDayConfigChange(t *testing.T) {
 	for _, store := range stores {
 		tests.MustPutStore(re, cluster, store)
 	}
-	defer cluster.Destroy()
+
 	startTime := time.Now().Unix()
 	tests.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"), core.SetWrittenBytes(3000000000),
 		core.SetReportInterval(uint64(startTime-utils.RegionHeartBeatReportInterval), uint64(startTime)))
@@ -237,16 +241,17 @@ func TestHotRegionStorageWriteIntervalConfigChange(t *testing.T) {
 	interval := 100 * time.Millisecond
 	defer cancel()
 	cluster, err := tests.NewTestCluster(ctx, 1,
-		func(cfg *config.Config, serverName string) {
+		func(cfg *config.Config, _ string) {
 			cfg.Schedule.HotRegionCacheHitsThreshold = 0
 			cfg.Schedule.HotRegionsWriteInterval.Duration = interval
 			cfg.Schedule.HotRegionsReservedDays = 1
 		},
 	)
 	re.NoError(err)
+	defer cluster.Destroy()
 	err = cluster.RunInitialServers()
 	re.NoError(err)
-	cluster.WaitLeader()
+	re.NotEmpty(cluster.WaitLeader())
 	stores := []*metapb.Store{
 		{
 			Id:            1,
@@ -265,7 +270,6 @@ func TestHotRegionStorageWriteIntervalConfigChange(t *testing.T) {
 	for _, store := range stores {
 		tests.MustPutStore(re, cluster, store)
 	}
-	defer cluster.Destroy()
 	startTime := time.Now().Unix()
 	tests.MustPutRegion(re, cluster, 1, 1, []byte("a"), []byte("b"),
 		core.SetWrittenBytes(3000000000),

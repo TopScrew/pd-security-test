@@ -19,6 +19,8 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+
+	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 )
@@ -98,19 +100,27 @@ func SetStoreState(state metapb.StoreState, physicallyDestroyed ...bool) StoreCr
 	}
 }
 
-// PauseLeaderTransfer prevents the store from been selected as source or
-// target store of TransferLeader.
-func PauseLeaderTransfer() StoreCreateOption {
+// PauseLeaderTransfer prevents the store from been selected as source or target store of TransferLeader.
+func PauseLeaderTransfer(d constant.Direction) StoreCreateOption {
 	return func(store *StoreInfo) {
-		store.pauseLeaderTransfer = true
+		switch d {
+		case constant.In:
+			store.pauseLeaderTransferIn = true
+		case constant.Out:
+			store.pauseLeaderTransferOut = true
+		}
 	}
 }
 
-// ResumeLeaderTransfer cleans a store's pause state. The store can be selected
-// as source or target of TransferLeader again.
-func ResumeLeaderTransfer() StoreCreateOption {
+// ResumeLeaderTransfer cleans a store's pause state. The store can be selected as source or target of TransferLeader again.
+func ResumeLeaderTransfer(d constant.Direction) StoreCreateOption {
 	return func(store *StoreInfo) {
-		store.pauseLeaderTransfer = false
+		switch d {
+		case constant.In:
+			store.pauseLeaderTransferIn = false
+		case constant.Out:
+			store.pauseLeaderTransferOut = false
+		}
 	}
 }
 
@@ -272,5 +282,25 @@ func SetStoreLimit(limit storelimit.StoreLimit) StoreCreateOption {
 func SetLastAwakenTime(lastAwaken time.Time) StoreCreateOption {
 	return func(store *StoreInfo) {
 		store.lastAwakenTime = lastAwaken
+	}
+}
+
+// SetStoreMeta sets the meta for the store.
+// NOTICE: LastHeartbeat is not persisted each time, so it is not set by this function. Please use SetLastHeartbeatTS instead.
+func SetStoreMeta(newMeta *metapb.Store) StoreCreateOption {
+	return func(store *StoreInfo) {
+		meta := typeutil.DeepClone(store.meta, StoreFactory)
+		meta.Version = newMeta.GetVersion()
+		meta.GitHash = newMeta.GetGitHash()
+		meta.Address = newMeta.GetAddress()
+		meta.StatusAddress = newMeta.GetStatusAddress()
+		meta.PeerAddress = newMeta.GetPeerAddress()
+		meta.StartTimestamp = newMeta.GetStartTimestamp()
+		meta.DeployPath = newMeta.GetDeployPath()
+		meta.State = newMeta.GetState()
+		meta.Labels = newMeta.GetLabels()
+		meta.NodeState = newMeta.GetNodeState()
+		meta.PhysicallyDestroyed = newMeta.GetPhysicallyDestroyed()
+		store.meta = meta
 	}
 }

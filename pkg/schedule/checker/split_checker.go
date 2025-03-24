@@ -17,6 +17,7 @@ package checker
 import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
@@ -33,14 +34,6 @@ type SplitChecker struct {
 	labeler     *labeler.RegionLabeler
 }
 
-const splitCheckerName = "split_checker"
-
-var (
-	// WithLabelValues is a heavy operation, define variable to avoid call it every time.
-	splitCheckerCounter       = checkerCounter.WithLabelValues(splitCheckerName, "check")
-	splitCheckerPausedCounter = checkerCounter.WithLabelValues(splitCheckerName, "paused")
-)
-
 // NewSplitChecker creates a new SplitChecker.
 func NewSplitChecker(cluster sche.CheckerCluster, ruleManager *placement.RuleManager, labeler *labeler.RegionLabeler) *SplitChecker {
 	return &SplitChecker{
@@ -51,7 +44,7 @@ func NewSplitChecker(cluster sche.CheckerCluster, ruleManager *placement.RuleMan
 }
 
 // GetType returns the checker type.
-func (c *SplitChecker) GetType() string {
+func (*SplitChecker) GetType() string {
 	return "split-checker"
 }
 

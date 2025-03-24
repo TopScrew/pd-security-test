@@ -15,11 +15,14 @@
 package statistics
 
 import (
+	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
 	"github.com/tikv/pd/pkg/schedule/placement"
@@ -29,8 +32,8 @@ import (
 func TestRegionStatistics(t *testing.T) {
 	re := require.New(t)
 	store := storage.NewStorageWithMemoryBackend()
-	manager := placement.NewRuleManager(store, nil, nil)
-	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "")
+	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
+	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
 	re.NoError(err)
 	opt := mockconfig.NewTestOptions()
 	opt.SetPlacementRuleEnabled(false)
@@ -118,8 +121,8 @@ func TestRegionStatistics(t *testing.T) {
 func TestRegionStatisticsWithPlacementRule(t *testing.T) {
 	re := require.New(t)
 	store := storage.NewStorageWithMemoryBackend()
-	manager := placement.NewRuleManager(store, nil, nil)
-	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "")
+	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
+	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
 	re.NoError(err)
 	opt := mockconfig.NewTestOptions()
 	opt.SetPlacementRuleEnabled(true)
@@ -266,5 +269,45 @@ func TestRegionLabelIsolationLevel(t *testing.T) {
 	}
 	for i, res := range counter {
 		re.Equal(res, labelLevelStats.labelCounter[i])
+	}
+}
+
+func BenchmarkObserve(b *testing.B) {
+	// Setup
+	store := storage.NewStorageWithMemoryBackend()
+	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
+	manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
+	opt := mockconfig.NewTestOptions()
+	opt.SetPlacementRuleEnabled(false)
+	peers := []*metapb.Peer{
+		{Id: 4, StoreId: 1},
+		{Id: 5, StoreId: 2},
+		{Id: 6, StoreId: 3},
+	}
+
+	metaStores := []*metapb.Store{
+		{Id: 1, Address: "mock://tikv-1"},
+		{Id: 2, Address: "mock://tikv-2"},
+		{Id: 3, Address: "mock://tikv-3"},
+	}
+
+	stores := make([]*core.StoreInfo, 0, len(metaStores))
+	for _, m := range metaStores {
+		s := core.NewStoreInfo(m)
+		stores = append(stores, s)
+	}
+
+	regionNum := uint64(1000000)
+	regions := make([]*core.RegionInfo, 0, regionNum)
+	for i := uint64(1); i <= regionNum; i++ {
+		r := &metapb.Region{Id: i, Peers: peers, StartKey: []byte{byte(i)}, EndKey: []byte{byte(i + 1)}}
+		regions = append(regions, core.NewRegionInfo(r, peers[0]))
+	}
+	regionStats := NewRegionStatistics(nil, opt, manager)
+
+	b.ResetTimer()
+	// Run the Observe function b.N times
+	for i := range b.N {
+		regionStats.Observe(regions[i%int(regionNum)], stores)
 	}
 }

@@ -45,7 +45,7 @@ var (
 			Subsystem: "scheduler",
 			Name:      "region_heartbeat_latency_seconds",
 			Help:      "Bucketed histogram of latency (s) of receiving heartbeat.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 12),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 13),
 		}, []string{"address", "store"})
 
 	metadataGauge = prometheus.NewGaugeVec(
@@ -99,6 +99,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 13),
 		})
 
+	queryRegionDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "pd",
+			Subsystem: "server",
+			Name:      "query_region_duration_seconds",
+			Help:      "Bucketed histogram of processing time (s) of region query requests.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 13),
+		})
+
 	bucketReportLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "pd",
@@ -136,14 +145,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 29), // 0.1ms ~ 7hours
 		}, []string{"address", "store"})
 
-	serverInfo = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "pd",
-			Subsystem: "server",
-			Name:      "info",
-			Help:      "Indicate the pd server info, and the value is the start timestamp (s).",
-		}, []string{"version", "hash"})
-
 	serviceAuditHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "pd",
@@ -151,14 +152,23 @@ var (
 			Name:      "audit_handling_seconds",
 			Help:      "PD server service handling audit",
 			Buckets:   prometheus.DefBuckets,
-		}, []string{"service", "method", "component", "ip"})
-	serverMaxProcs = prometheus.NewGauge(
+		}, []string{"service", "method", "caller_id", "ip"})
+
+	apiConcurrencyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "pd",
-			Subsystem: "service",
-			Name:      "maxprocs",
-			Help:      "The value of GOMAXPROCS.",
-		})
+			Subsystem: "server",
+			Name:      "api_concurrency",
+			Help:      "Concurrency number of the api.",
+		}, []string{"kind", "api"})
+
+	forwardFailCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "pd",
+			Subsystem: "server",
+			Name:      "forward_fail_total",
+			Help:      "Counter of forward fail.",
+		}, []string{"request", "type"})
 	forwardTsoDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "pd",
@@ -179,13 +189,14 @@ func init() {
 	prometheus.MustRegister(tsoProxyBatchSize)
 	prometheus.MustRegister(tsoProxyForwardTimeoutCounter)
 	prometheus.MustRegister(tsoHandleDuration)
+	prometheus.MustRegister(queryRegionDuration)
 	prometheus.MustRegister(regionHeartbeatHandleDuration)
 	prometheus.MustRegister(storeHeartbeatHandleDuration)
-	prometheus.MustRegister(serverInfo)
 	prometheus.MustRegister(bucketReportCounter)
 	prometheus.MustRegister(bucketReportLatency)
 	prometheus.MustRegister(serviceAuditHistogram)
 	prometheus.MustRegister(bucketReportInterval)
-	prometheus.MustRegister(serverMaxProcs)
+	prometheus.MustRegister(apiConcurrencyGauge)
+	prometheus.MustRegister(forwardFailCounter)
 	prometheus.MustRegister(forwardTsoDuration)
 }

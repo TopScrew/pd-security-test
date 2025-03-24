@@ -20,17 +20,19 @@ import (
 	"strings"
 	"time"
 
+	promClient "github.com/prometheus/client_golang/api"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	promClient "github.com/prometheus/client_golang/api"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/filter"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/server/cluster"
 	"github.com/tikv/pd/server/config"
-	"go.etcd.io/etcd/clientv3"
-	"go.uber.org/zap"
 )
 
 const (
@@ -409,7 +411,7 @@ func buildPlans(planMap map[string]map[string]struct{}, resourceTypeMap map[stri
 }
 
 // TODO: implement heterogeneous logic and take cluster information into consideration.
-func findBestGroupToScaleIn(strategy *Strategy, scaleInQuota float64, groups []*Plan) Plan {
+func findBestGroupToScaleIn(_ *Strategy, _ float64, groups []*Plan) Plan {
 	return *groups[0]
 }
 
@@ -431,7 +433,7 @@ func findBestGroupToScaleOut(strategy *Strategy, groups []*Plan, component Compo
 		},
 	}
 
-	// TODO: we can provide different senerios by using options and remove this kind of special judgement.
+	// TODO: we can provide different scenarios by using options and remove this kind of special judgement.
 	if component == TiKV {
 		group.Labels[filter.SpecialUseKey] = filter.SpecialUseHotRegion
 	}

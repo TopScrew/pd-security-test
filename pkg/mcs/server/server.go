@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,10 +23,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tikv/pd/pkg/mcs/utils"
-	"github.com/tikv/pd/pkg/utils/grpcutil"
-	"go.etcd.io/etcd/clientv3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
+
+	"github.com/pingcap/log"
+
+	"github.com/tikv/pd/pkg/mcs/utils/constant"
+	"github.com/tikv/pd/pkg/utils/grpcutil"
 )
 
 // BaseServer is a basic server that provides some common functionality.
@@ -94,9 +97,14 @@ func (bs *BaseServer) GetHTTPClient() *http.Client {
 	return bs.httpClient
 }
 
-// SetETCDClient sets the etcd client.
-func (bs *BaseServer) SetETCDClient(etcdClient *clientv3.Client) {
+// SetEtcdClient sets the etcd client.
+func (bs *BaseServer) SetEtcdClient(etcdClient *clientv3.Client) {
 	bs.etcdClient = etcdClient
+}
+
+// GetEtcdClient returns the etcd client.
+func (bs *BaseServer) GetEtcdClient() *clientv3.Client {
+	return bs.etcdClient
 }
 
 // SetHTTPClient sets the http client.
@@ -146,9 +154,9 @@ func (bs *BaseServer) InitListener(tlsCfg *grpcutil.TLSConfig, listenAddr string
 	}
 	if tlsConfig != nil {
 		bs.secure = true
-		bs.muxListener, err = tls.Listen(utils.TCPNetworkStr, listenURL.Host, tlsConfig)
+		bs.muxListener, err = tls.Listen(constant.TCPNetworkStr, listenURL.Host, tlsConfig)
 	} else {
-		bs.muxListener, err = net.Listen(utils.TCPNetworkStr, listenURL.Host)
+		bs.muxListener, err = net.Listen(constant.TCPNetworkStr, listenURL.Host)
 	}
 	return err
 }
@@ -161,4 +169,20 @@ func (bs *BaseServer) GetListener() net.Listener {
 // IsSecure checks if the server enable TLS.
 func (bs *BaseServer) IsSecure() bool {
 	return bs.secure
+}
+
+// StartTimestamp returns the start timestamp of this server
+func (bs *BaseServer) StartTimestamp() int64 {
+	return bs.startTimestamp
+}
+
+// CloseClientConns closes all client connections.
+func (bs *BaseServer) CloseClientConns() {
+	bs.clientConns.Range(func(_, value any) bool {
+		conn := value.(*grpc.ClientConn)
+		if err := conn.Close(); err != nil {
+			log.Error("close client connection meet error")
+		}
+		return true
+	})
 }

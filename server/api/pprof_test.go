@@ -4,13 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package api
 
 import (
@@ -21,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"
 )
@@ -52,13 +54,14 @@ func (suite *profTestSuite) TearDownSuite() {
 }
 
 func (suite *profTestSuite) TestGetZip() {
-	rsp, err := testDialClient.Get(suite.urlPrefix + "/pprof/zip?" + "seconds=5s")
-	suite.NoError(err)
+	re := suite.Require()
+	rsp, err := testDialClient.Get(suite.urlPrefix + "/pprof/zip?" + "seconds=5")
+	re.NoError(err)
 	defer rsp.Body.Close()
 	body, err := io.ReadAll(rsp.Body)
-	suite.NoError(err)
-	suite.NotNil(body)
+	re.NoError(err)
+	re.NotNil(body)
 	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
-	suite.NoError(err)
-	suite.Len(zipReader.File, 7)
+	re.NoError(err)
+	re.Len(zipReader.File, 7)
 }

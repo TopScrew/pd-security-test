@@ -20,14 +20,17 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -50,22 +53,23 @@ const (
 type StoreInfo struct {
 	meta *metapb.Store
 	*storeStats
-	pauseLeaderTransfer bool // not allow to be used as source or target of transfer leader
-	slowStoreEvicted    bool // this store has been evicted as a slow store, should not transfer leader to it
-	slowTrendEvicted    bool // this store has been evicted as a slow store by trend, should not transfer leader to it
-	leaderCount         int
-	regionCount         int
-	learnerCount        int
-	witnessCount        int
-	leaderSize          int64
-	regionSize          int64
-	pendingPeerCount    int
-	lastPersistTime     time.Time
-	leaderWeight        float64
-	regionWeight        float64
-	limiter             storelimit.StoreLimit
-	minResolvedTS       uint64
-	lastAwakenTime      time.Time
+	pauseLeaderTransferIn  bool // not allow to be used as target of transfer leader
+	pauseLeaderTransferOut bool // not allow to be used as source of transfer leader
+	slowStoreEvicted       bool // this store has been evicted as a slow store, should not transfer leader to it
+	slowTrendEvicted       bool // this store has been evicted as a slow store by trend, should not transfer leader to it
+	leaderCount            int
+	regionCount            int
+	learnerCount           int
+	witnessCount           int
+	leaderSize             int64
+	regionSize             int64
+	pendingPeerCount       int
+	lastPersistTime        time.Time
+	leaderWeight           float64
+	regionWeight           float64
+	limiter                storelimit.StoreLimit
+	minResolvedTS          uint64
+	lastAwakenTime         time.Time
 }
 
 // NewStoreInfo creates StoreInfo with meta data.
@@ -137,10 +141,16 @@ func (s *StoreInfo) ShallowClone(opts ...StoreCreateOption) *StoreInfo {
 	return &store
 }
 
-// AllowLeaderTransfer returns if the store is allowed to be selected
-// as source or target of transfer leader.
-func (s *StoreInfo) AllowLeaderTransfer() bool {
-	return !s.pauseLeaderTransfer
+// AllowLeaderTransferIn returns if the store is allowed to be selected
+// as target of transfer leader.
+func (s *StoreInfo) AllowLeaderTransferIn() bool {
+	return !s.pauseLeaderTransferIn
+}
+
+// AllowLeaderTransferOut returns if the store is allowed to be selected
+// as source of transfer leader.
+func (s *StoreInfo) AllowLeaderTransferOut() bool {
+	return !s.pauseLeaderTransferOut
 }
 
 // EvictedAsSlowStore returns if the store should be evicted as a slow store.
@@ -639,6 +649,7 @@ func MergeLabels(origin []*metapb.StoreLabel, labels []*metapb.StoreLabel) []*me
 
 // StoresInfo contains information about all stores.
 type StoresInfo struct {
+	syncutil.RWMutex
 	stores map[uint64]*StoreInfo
 }
 
@@ -649,8 +660,12 @@ func NewStoresInfo() *StoresInfo {
 	}
 }
 
+/* Stores read operations */
+
 // GetStore returns a copy of the StoreInfo with the specified storeID.
 func (s *StoresInfo) GetStore(storeID uint64) *StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
 	store, ok := s.stores[storeID]
 	if !ok {
 		return nil
@@ -658,39 +673,161 @@ func (s *StoresInfo) GetStore(storeID uint64) *StoreInfo {
 	return store
 }
 
-// SetStore sets a StoreInfo with storeID.
-func (s *StoresInfo) SetStore(store *StoreInfo) {
+// GetStores gets a complete set of StoreInfo.
+func (s *StoresInfo) GetStores() []*StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
+	stores := make([]*StoreInfo, 0, len(s.stores))
+	for _, store := range s.stores {
+		stores = append(stores, store)
+	}
+	return stores
+}
+
+// GetMetaStores gets a complete set of metapb.Store.
+func (s *StoresInfo) GetMetaStores() []*metapb.Store {
+	s.RLock()
+	defer s.RUnlock()
+	stores := make([]*metapb.Store, 0, len(s.stores))
+	for _, store := range s.stores {
+		stores = append(stores, store.GetMeta())
+	}
+	return stores
+}
+
+// GetStoreIDs returns a list of store ids.
+func (s *StoresInfo) GetStoreIDs() []uint64 {
+	s.RLock()
+	defer s.RUnlock()
+	count := len(s.stores)
+	storeIDs := make([]uint64, 0, count)
+	for _, store := range s.stores {
+		storeIDs = append(storeIDs, store.GetID())
+	}
+	return storeIDs
+}
+
+// GetFollowerStores returns all Stores that contains the region's follower peer.
+func (s *StoresInfo) GetFollowerStores(region *RegionInfo) []*StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
+	var stores []*StoreInfo
+	for id := range region.GetFollowers() {
+		if store, ok := s.stores[id]; ok && store != nil {
+			stores = append(stores, store)
+		}
+	}
+	return stores
+}
+
+// GetRegionStores returns all Stores that contains the region's peer.
+func (s *StoresInfo) GetRegionStores(region *RegionInfo) []*StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
+	var stores []*StoreInfo
+	for id := range region.GetStoreIDs() {
+		if store, ok := s.stores[id]; ok && store != nil {
+			stores = append(stores, store)
+		}
+	}
+	return stores
+}
+
+// GetLeaderStore returns all Stores that contains the region's leader peer.
+func (s *StoresInfo) GetLeaderStore(region *RegionInfo) *StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
+	if store, ok := s.stores[region.GetLeader().GetStoreId()]; ok && store != nil {
+		return store
+	}
+	return nil
+}
+
+// GetStoreCount returns the total count of storeInfo.
+func (s *StoresInfo) GetStoreCount() int {
+	s.RLock()
+	defer s.RUnlock()
+	return len(s.stores)
+}
+
+// GetNonWitnessVoterStores returns all Stores that contains the non-witness's voter peer.
+func (s *StoresInfo) GetNonWitnessVoterStores(region *RegionInfo) []*StoreInfo {
+	s.RLock()
+	defer s.RUnlock()
+	var stores []*StoreInfo
+	for id := range region.GetNonWitnessVoters() {
+		if store, ok := s.stores[id]; ok && store != nil {
+			stores = append(stores, store)
+		}
+	}
+	return stores
+}
+
+/* Stores write operations */
+
+// PutStore sets a StoreInfo with storeID.
+func (s *StoresInfo) PutStore(store *StoreInfo) {
+	s.Lock()
+	defer s.Unlock()
+	s.putStoreLocked(store)
+}
+
+// putStoreLocked sets a StoreInfo with storeID.
+func (s *StoresInfo) putStoreLocked(store *StoreInfo) {
 	s.stores[store.GetID()] = store
 }
 
-// PauseLeaderTransfer pauses a StoreInfo with storeID.
-func (s *StoresInfo) PauseLeaderTransfer(storeID uint64) error {
+// ResetStores resets the store cache.
+func (s *StoresInfo) ResetStores() {
+	s.Lock()
+	defer s.Unlock()
+	s.stores = make(map[uint64]*StoreInfo)
+}
+
+// PauseLeaderTransfer pauses a StoreInfo with storeID. The store can not be selected
+// as source or target of TransferLeader.
+func (s *StoresInfo) PauseLeaderTransfer(storeID uint64, direction constant.Direction) error {
+	s.Lock()
+	defer s.Unlock()
+	log.Info("pause store leader transfer", zap.Uint64("store-id", storeID), zap.String("direction", direction.String()))
 	store, ok := s.stores[storeID]
 	if !ok {
 		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
 	}
-	if !store.AllowLeaderTransfer() {
-		return errs.ErrPauseLeaderTransfer.FastGenByArgs(storeID)
+	switch direction {
+	case constant.In:
+		if !store.AllowLeaderTransferIn() {
+			return errs.ErrPauseLeaderTransferIn.FastGenByArgs(storeID)
+		}
+	case constant.Out:
+		if !store.AllowLeaderTransferOut() {
+			return errs.ErrPauseLeaderTransferOut.FastGenByArgs(storeID)
+		}
 	}
-	s.stores[storeID] = store.Clone(PauseLeaderTransfer())
+	s.stores[storeID] = store.Clone(PauseLeaderTransfer(direction))
 	return nil
 }
 
 // ResumeLeaderTransfer cleans a store's pause state. The store can be selected
 // as source or target of TransferLeader again.
-func (s *StoresInfo) ResumeLeaderTransfer(storeID uint64) {
+func (s *StoresInfo) ResumeLeaderTransfer(storeID uint64, direction constant.Direction) {
+	s.Lock()
+	defer s.Unlock()
+	log.Info("resume store leader transfer", zap.Uint64("store-id", storeID), zap.String("direction", direction.String()))
 	store, ok := s.stores[storeID]
 	if !ok {
 		log.Warn("try to clean a store's pause state, but it is not found. It may be cleanup",
 			zap.Uint64("store-id", storeID))
 		return
 	}
-	s.stores[storeID] = store.Clone(ResumeLeaderTransfer())
+	s.stores[storeID] = store.Clone(ResumeLeaderTransfer(direction))
 }
 
 // SlowStoreEvicted marks a store as a slow store and prevents transferring
 // leader to the store
 func (s *StoresInfo) SlowStoreEvicted(storeID uint64) error {
+	s.Lock()
+	defer s.Unlock()
 	store, ok := s.stores[storeID]
 	if !ok {
 		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
@@ -704,6 +841,8 @@ func (s *StoresInfo) SlowStoreEvicted(storeID uint64) error {
 
 // SlowStoreRecovered cleans the evicted state of a store.
 func (s *StoresInfo) SlowStoreRecovered(storeID uint64) {
+	s.Lock()
+	defer s.Unlock()
 	store, ok := s.stores[storeID]
 	if !ok {
 		log.Warn("try to clean a store's evicted as a slow store state, but it is not found. It may be cleanup",
@@ -716,6 +855,8 @@ func (s *StoresInfo) SlowStoreRecovered(storeID uint64) {
 // SlowTrendEvicted marks a store as a slow trend and prevents transferring
 // leader to the store
 func (s *StoresInfo) SlowTrendEvicted(storeID uint64) error {
+	s.Lock()
+	defer s.Unlock()
 	store, ok := s.stores[storeID]
 	if !ok {
 		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
@@ -729,6 +870,8 @@ func (s *StoresInfo) SlowTrendEvicted(storeID uint64) error {
 
 // SlowTrendRecovered cleans the evicted by trend state of a store.
 func (s *StoresInfo) SlowTrendRecovered(storeID uint64) {
+	s.Lock()
+	defer s.Unlock()
 	store, ok := s.stores[storeID]
 	if !ok {
 		log.Warn("try to clean a store's evicted by trend as a slow store state, but it is not found. It may be cleanup",
@@ -740,76 +883,24 @@ func (s *StoresInfo) SlowTrendRecovered(storeID uint64) {
 
 // ResetStoreLimit resets the limit for a specific store.
 func (s *StoresInfo) ResetStoreLimit(storeID uint64, limitType storelimit.Type, ratePerSec ...float64) {
+	s.Lock()
+	defer s.Unlock()
 	if store, ok := s.stores[storeID]; ok {
 		s.stores[storeID] = store.Clone(ResetStoreLimit(limitType, ratePerSec...))
 	}
 }
 
-// GetStores gets a complete set of StoreInfo.
-func (s *StoresInfo) GetStores() []*StoreInfo {
-	stores := make([]*StoreInfo, 0, len(s.stores))
-	for _, store := range s.stores {
-		stores = append(stores, store)
-	}
-	return stores
-}
-
-// GetMetaStores gets a complete set of metapb.Store.
-func (s *StoresInfo) GetMetaStores() []*metapb.Store {
-	stores := make([]*metapb.Store, 0, len(s.stores))
-	for _, store := range s.stores {
-		stores = append(stores, store.GetMeta())
-	}
-	return stores
-}
-
 // DeleteStore deletes tombstone record form store
 func (s *StoresInfo) DeleteStore(store *StoreInfo) {
+	s.Lock()
+	defer s.Unlock()
 	delete(s.stores, store.GetID())
-}
-
-// GetStoreCount returns the total count of storeInfo.
-func (s *StoresInfo) GetStoreCount() int {
-	return len(s.stores)
-}
-
-// SetLeaderCount sets the leader count to a storeInfo.
-func (s *StoresInfo) SetLeaderCount(storeID uint64, leaderCount int) {
-	if store, ok := s.stores[storeID]; ok {
-		s.stores[storeID] = store.Clone(SetLeaderCount(leaderCount))
-	}
-}
-
-// SetRegionCount sets the region count to a storeInfo.
-func (s *StoresInfo) SetRegionCount(storeID uint64, regionCount int) {
-	if store, ok := s.stores[storeID]; ok {
-		s.stores[storeID] = store.Clone(SetRegionCount(regionCount))
-	}
-}
-
-// SetPendingPeerCount sets the pending count to a storeInfo.
-func (s *StoresInfo) SetPendingPeerCount(storeID uint64, pendingPeerCount int) {
-	if store, ok := s.stores[storeID]; ok {
-		s.stores[storeID] = store.Clone(SetPendingPeerCount(pendingPeerCount))
-	}
-}
-
-// SetLeaderSize sets the leader size to a storeInfo.
-func (s *StoresInfo) SetLeaderSize(storeID uint64, leaderSize int64) {
-	if store, ok := s.stores[storeID]; ok {
-		s.stores[storeID] = store.Clone(SetLeaderSize(leaderSize))
-	}
-}
-
-// SetRegionSize sets the region size to a storeInfo.
-func (s *StoresInfo) SetRegionSize(storeID uint64, regionSize int64) {
-	if store, ok := s.stores[storeID]; ok {
-		s.stores[storeID] = store.Clone(SetRegionSize(regionSize))
-	}
 }
 
 // UpdateStoreStatus updates the information of the store.
 func (s *StoresInfo) UpdateStoreStatus(storeID uint64, leaderCount, regionCount, witnessCount, learnerCount, pendingPeerCount int, leaderSize int64, regionSize int64) {
+	s.Lock()
+	defer s.Unlock()
 	if store, ok := s.stores[storeID]; ok {
 		newStore := store.ShallowClone(SetLeaderCount(leaderCount),
 			SetRegionCount(regionCount),
@@ -818,7 +909,7 @@ func (s *StoresInfo) UpdateStoreStatus(storeID uint64, leaderCount, regionCount,
 			SetPendingPeerCount(pendingPeerCount),
 			SetLeaderSize(leaderSize),
 			SetRegionSize(regionSize))
-		s.SetStore(newStore)
+		s.putStoreLocked(newStore)
 	}
 }
 

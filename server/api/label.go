@@ -19,11 +19,14 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/unrolled/render"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
+
 	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/response"
 	"github.com/tikv/pd/server"
-	"github.com/unrolled/render"
 )
 
 type labelsHandler struct {
@@ -65,7 +68,7 @@ func (h *labelsHandler) GetLabels(w http.ResponseWriter, r *http.Request) {
 // @Param    name   query  string  true  "name of store label filter"
 // @Param    value  query  string  true  "value of store label filter"
 // @Produce  json
-// @Success  200  {object}  StoresInfo
+// @Success  200  {object}  response.StoresInfo
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /labels/stores [get]
 func (h *labelsHandler) GetStoresByLabel(w http.ResponseWriter, r *http.Request) {
@@ -79,8 +82,8 @@ func (h *labelsHandler) GetStoresByLabel(w http.ResponseWriter, r *http.Request)
 	}
 
 	stores := rc.GetMetaStores()
-	storesInfo := &StoresInfo{
-		Stores: make([]*StoreInfo, 0, len(stores)),
+	storesInfo := &response.StoresInfo{
+		Stores: make([]*response.StoreInfo, 0, len(stores)),
 	}
 
 	stores = filter.filter(stores)
@@ -92,7 +95,7 @@ func (h *labelsHandler) GetStoresByLabel(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		storeInfo := newStoreInfo(h.svr.GetScheduleConfig(), store)
+		storeInfo := response.BuildStoreInfo(h.svr.GetScheduleConfig(), store)
 		storesInfo.Stores = append(storesInfo.Stores, storeInfo)
 	}
 	storesInfo.Count = len(storesInfo.Stores)

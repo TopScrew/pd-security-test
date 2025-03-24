@@ -19,8 +19,11 @@ import (
 	"math/rand"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
@@ -28,32 +31,12 @@ import (
 	"github.com/tikv/pd/pkg/schedule/config"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
-	"go.uber.org/zap"
+	"github.com/tikv/pd/pkg/schedule/types"
 )
 
 const (
-	replicaCheckerName = "replica-checker"
-	replicaChecker     = "replica_checker"
-	offlineStatus      = "offline"
-	downStatus         = "down"
-)
-
-var (
-	// WithLabelValues is a heavy operation, define variable to avoid call it every time.
-	replicaCheckerCounter                         = checkerCounter.WithLabelValues(replicaChecker, "check")
-	replicaCheckerPausedCounter                   = checkerCounter.WithLabelValues(replicaChecker, "paused")
-	replicaCheckerNewOpCounter                    = checkerCounter.WithLabelValues(replicaChecker, "new-operator")
-	replicaCheckerNoTargetStoreCounter            = checkerCounter.WithLabelValues(replicaChecker, "no-target-store")
-	replicaCheckerNoWorstPeerCounter              = checkerCounter.WithLabelValues(replicaChecker, "no-worst-peer")
-	replicaCheckerCreateOpFailedCounter           = checkerCounter.WithLabelValues(replicaChecker, "create-operator-failed")
-	replicaCheckerAllRightCounter                 = checkerCounter.WithLabelValues(replicaChecker, "all-right")
-	replicaCheckerNotBetterCounter                = checkerCounter.WithLabelValues(replicaChecker, "not-better")
-	replicaCheckerRemoveExtraOfflineFailedCounter = checkerCounter.WithLabelValues(replicaChecker, "remove-extra-offline-replica-failed")
-	replicaCheckerRemoveExtraDownFailedCounter    = checkerCounter.WithLabelValues(replicaChecker, "remove-extra-down-replica-failed")
-	replicaCheckerNoStoreOfflineCounter           = checkerCounter.WithLabelValues(replicaChecker, "no-store-offline")
-	replicaCheckerNoStoreDownCounter              = checkerCounter.WithLabelValues(replicaChecker, "no-store-down")
-	replicaCheckerReplaceOfflineFailedCounter     = checkerCounter.WithLabelValues(replicaChecker, "replace-offline-replica-failed")
-	replicaCheckerReplaceDownFailedCounter        = checkerCounter.WithLabelValues(replicaChecker, "replace-down-replica-failed")
+	offlineStatus = "offline"
+	downStatus    = "down"
 )
 
 // ReplicaChecker ensures region has the best replicas.
@@ -63,25 +46,30 @@ var (
 // Location management, mainly used for cross data center deployment.
 type ReplicaChecker struct {
 	PauseController
-	cluster           sche.CheckerCluster
-	conf              config.CheckerConfigProvider
-	regionWaitingList cache.Cache
-	r                 *rand.Rand
+	cluster                 sche.CheckerCluster
+	conf                    config.CheckerConfigProvider
+	pendingProcessedRegions *cache.TTLUint64
+	r                       *rand.Rand
 }
 
 // NewReplicaChecker creates a replica checker.
-func NewReplicaChecker(cluster sche.CheckerCluster, conf config.CheckerConfigProvider, regionWaitingList cache.Cache) *ReplicaChecker {
+func NewReplicaChecker(cluster sche.CheckerCluster, conf config.CheckerConfigProvider, pendingProcessedRegions *cache.TTLUint64) *ReplicaChecker {
 	return &ReplicaChecker{
-		cluster:           cluster,
-		conf:              conf,
-		regionWaitingList: regionWaitingList,
-		r:                 rand.New(rand.NewSource(time.Now().UnixNano())),
+		cluster:                 cluster,
+		conf:                    conf,
+		pendingProcessedRegions: pendingProcessedRegions,
+		r:                       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-// GetType return ReplicaChecker's type
-func (c *ReplicaChecker) GetType() string {
-	return replicaCheckerName
+// Name return ReplicaChecker's name.
+func (*ReplicaChecker) Name() string {
+	return types.ReplicaChecker.String()
+}
+
+// GetType return ReplicaChecker's type.
+func (*ReplicaChecker) GetType() types.CheckerSchedulerType {
+	return types.ReplicaChecker
 }
 
 // Check verifies a region's replicas, creating an operator.Operator if need.
@@ -183,7 +171,7 @@ func (c *ReplicaChecker) checkMakeUpReplica(region *core.RegionInfo) *operator.O
 		log.Debug("no store to add replica", zap.Uint64("region-id", region.GetID()))
 		replicaCheckerNoTargetStoreCounter.Inc()
 		if filterByTempState {
-			c.regionWaitingList.Put(region.GetID(), nil)
+			c.pendingProcessedRegions.Put(region.GetID(), nil)
 		}
 		return nil
 	}
@@ -210,7 +198,7 @@ func (c *ReplicaChecker) checkRemoveExtraReplica(region *core.RegionInfo) *opera
 	old := c.strategy(c.r, region).SelectStoreToRemove(regionStores)
 	if old == 0 {
 		replicaCheckerNoWorstPeerCounter.Inc()
-		c.regionWaitingList.Put(region.GetID(), nil)
+		c.pendingProcessedRegions.Put(region.GetID(), nil)
 		return nil
 	}
 	op, err := operator.CreateRemovePeerOperator("remove-extra-replica", c.cluster, operator.OpReplica, region, old)
@@ -275,7 +263,7 @@ func (c *ReplicaChecker) fixPeer(region *core.RegionInfo, storeID uint64, status
 		}
 		log.Debug("no best store to add replica", zap.Uint64("region-id", region.GetID()))
 		if filterByTempState {
-			c.regionWaitingList.Put(region.GetID(), nil)
+			c.pendingProcessedRegions.Put(region.GetID(), nil)
 		}
 		return nil
 	}
@@ -295,7 +283,7 @@ func (c *ReplicaChecker) fixPeer(region *core.RegionInfo, storeID uint64, status
 
 func (c *ReplicaChecker) strategy(r *rand.Rand, region *core.RegionInfo) *ReplicaStrategy {
 	return &ReplicaStrategy{
-		checkerName:    replicaCheckerName,
+		checkerName:    c.Name(),
 		cluster:        c.cluster,
 		locationLabels: c.conf.GetLocationLabels(),
 		isolationLevel: c.conf.GetIsolationLevel(),

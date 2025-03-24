@@ -20,6 +20,7 @@ import (
 	"net/http"
 
 	"github.com/spf13/cobra"
+
 	"github.com/tikv/pd/pkg/schedule"
 )
 
@@ -71,7 +72,7 @@ func sendPluginCommand(cmd *cobra.Command, action string, args []string) {
 		cmd.Println(cmd.Usage())
 		return
 	}
-	data := map[string]interface{}{
+	data := map[string]any{
 		"plugin-path": args[0],
 	}
 	reqData, err := json.Marshal(data)

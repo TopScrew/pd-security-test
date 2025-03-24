@@ -22,12 +22,14 @@ import (
 	"syscall"
 
 	grpcprometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/pingcap/log"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/autoscaling"
 	"github.com/tikv/pd/pkg/dashboard"
 	"github.com/tikv/pd/pkg/errs"
-	resource_manager "github.com/tikv/pd/pkg/mcs/resourcemanager/server"
 	scheduling "github.com/tikv/pd/pkg/mcs/scheduling/server"
 	tso "github.com/tikv/pd/pkg/mcs/tso/server"
 	"github.com/tikv/pd/pkg/memory"
@@ -42,7 +44,6 @@ import (
 	"github.com/tikv/pd/server/apiv2"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/server/join"
-	"go.uber.org/zap"
 
 	// register microservice API
 	_ "github.com/tikv/pd/pkg/mcs/resourcemanager/server/install"
@@ -53,7 +54,6 @@ import (
 const (
 	apiMode        = "api"
 	tsoMode        = "tso"
-	rmMode         = "resource-manager"
 	serviceModeEnv = "PD_SERVICE_MODE"
 )
 
@@ -70,7 +70,7 @@ func main() {
 	rootCmd.SetOutput(os.Stdout)
 	if err := rootCmd.Execute(); err != nil {
 		rootCmd.Println(err)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -78,12 +78,11 @@ func main() {
 func NewServiceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "services <mode>",
-		Short: "Run services, for example, tso, resource_manager",
+		Short: "Run services, for example, tso, scheduling",
 	}
 	cmd.AddCommand(NewTSOServiceCommand())
-	cmd.AddCommand(NewResourceManagerServiceCommand())
 	cmd.AddCommand(NewSchedulingServiceCommand())
-	cmd.AddCommand(NewAPIServiceCommand())
+	cmd.AddCommand(NewPDServiceCommand())
 	return cmd
 }
 
@@ -94,6 +93,7 @@ func NewTSOServiceCommand() *cobra.Command {
 		Short: "Run the TSO service",
 		Run:   tso.CreateServerWrapper,
 	}
+	cmd.Flags().StringP("name", "", "", "human-readable name for this tso member")
 	cmd.Flags().BoolP("version", "V", false, "print version information and exit")
 	cmd.Flags().StringP("config", "", "", "config file")
 	cmd.Flags().StringP("backend-endpoints", "", "", "url for etcd client")
@@ -114,6 +114,7 @@ func NewSchedulingServiceCommand() *cobra.Command {
 		Short: "Run the scheduling service",
 		Run:   scheduling.CreateServerWrapper,
 	}
+	cmd.Flags().StringP("name", "", "", "human-readable name for this scheduling member")
 	cmd.Flags().BoolP("version", "V", false, "print version information and exit")
 	cmd.Flags().StringP("config", "", "", "config file")
 	cmd.Flags().StringP("backend-endpoints", "", "", "url for etcd client")
@@ -127,32 +128,12 @@ func NewSchedulingServiceCommand() *cobra.Command {
 	return cmd
 }
 
-// NewResourceManagerServiceCommand returns the resource manager service command.
-func NewResourceManagerServiceCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   rmMode,
-		Short: "Run the resource manager service",
-		Run:   resource_manager.CreateServerWrapper,
-	}
-	cmd.Flags().BoolP("version", "V", false, "print version information and exit")
-	cmd.Flags().StringP("config", "", "", "config file")
-	cmd.Flags().StringP("backend-endpoints", "", "", "url for etcd client")
-	cmd.Flags().StringP("listen-addr", "", "", "listen address for resource management service")
-	cmd.Flags().StringP("advertise-listen-addr", "", "", "advertise urls for listen address (default '${listen-addr}')")
-	cmd.Flags().StringP("cacert", "", "", "path of file that contains list of trusted TLS CAs")
-	cmd.Flags().StringP("cert", "", "", "path of file that contains X509 certificate in PEM format")
-	cmd.Flags().StringP("key", "", "", "path of file that contains X509 key in PEM format")
-	cmd.Flags().StringP("log-level", "L", "", "log level: debug, info, warn, error, fatal (default 'info')")
-	cmd.Flags().StringP("log-file", "", "", "log file path")
-	return cmd
-}
-
-// NewAPIServiceCommand returns the API service command.
-func NewAPIServiceCommand() *cobra.Command {
+// NewPDServiceCommand returns the PD service command.
+func NewPDServiceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   apiMode,
-		Short: "Run the API service",
-		Run:   createAPIServerWrapper,
+		Short: "Run the PD service",
+		Run:   createPDServiceWrapper,
 	}
 	addFlags(cmd)
 	return cmd
@@ -179,7 +160,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolP("force-new-cluster", "", false, "force to create a new one-member cluster")
 }
 
-func createAPIServerWrapper(cmd *cobra.Command, args []string) {
+func createPDServiceWrapper(cmd *cobra.Command, args []string) {
 	start(cmd, args, cmd.CalledAs())
 }
 
@@ -196,8 +177,12 @@ func start(cmd *cobra.Command, args []string, services ...string) {
 	schedulers.Register()
 	cfg := config.NewConfig()
 	flagSet := cmd.Flags()
-	flagSet.Parse(args)
-	err := cfg.Parse(flagSet)
+	err := flagSet.Parse(args)
+	if err != nil {
+		cmd.Println(err)
+		return
+	}
+	err = cfg.Parse(flagSet)
 	defer logutil.LogPanic()
 
 	if err != nil {
@@ -221,6 +206,8 @@ func start(cmd *cobra.Command, args []string, services ...string) {
 		exit(0)
 	}
 
+	// Check the PD version first before running.
+	server.CheckAndGetPDVersion()
 	// New zap logger
 	err = logutil.SetupLogger(&cfg.Log, &cfg.Logger, &cfg.LogProps, cfg.Security.RedactInfoLog)
 	if err == nil {
@@ -231,11 +218,7 @@ func start(cmd *cobra.Command, args []string, services ...string) {
 	// Flushing any buffered log entries
 	defer log.Sync()
 	memory.InitMemoryHook()
-	if len(services) != 0 {
-		versioninfo.Log(server.APIServiceMode)
-	} else {
-		versioninfo.Log(server.PDMode)
-	}
+	versioninfo.Log(server.PD)
 
 	for _, msg := range cfg.WarningMsgs {
 		log.Warn(msg)
@@ -244,6 +227,7 @@ func start(cmd *cobra.Command, args []string, services ...string) {
 	grpcprometheus.EnableHandlingTimeHistogram()
 
 	metricutil.Push(&cfg.Metric)
+	metricutil.EnablePyroscope()
 
 	err = join.PrepareJoinCluster(cfg)
 	if err != nil {

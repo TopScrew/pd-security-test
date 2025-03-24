@@ -16,8 +16,10 @@ package core
 
 import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
+
 	"github.com/tikv/pd/pkg/movingaverage"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"github.com/tikv/pd/pkg/utils/typeutil"
 )
 
 type storeStats struct {
@@ -56,10 +58,8 @@ func (ss *storeStats) GetStoreStats() *pdpb.StoreStats {
 // CloneStoreStats returns the statistics information cloned from the store.
 func (ss *storeStats) CloneStoreStats() *pdpb.StoreStats {
 	ss.mu.RLock()
-	b, _ := ss.rawStats.Marshal()
+	stats := typeutil.DeepClone(ss.rawStats, StoreStatsFactory)
 	ss.mu.RUnlock()
-	stats := &pdpb.StoreStats{}
-	stats.Unmarshal(b)
 	return stats
 }
 

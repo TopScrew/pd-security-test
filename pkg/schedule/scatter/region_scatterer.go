@@ -22,10 +22,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
@@ -36,7 +39,6 @@ import (
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
-	"go.uber.org/zap"
 )
 
 const regionScatterName = "region-scatter"
@@ -123,12 +125,12 @@ type RegionScatterer struct {
 	ordinaryEngine    engineContext
 	specialEngines    sync.Map
 	opController      *operator.Controller
-	addSuspectRegions func(regionIDs ...uint64)
+	addSuspectRegions func(bool, ...uint64)
 }
 
 // NewRegionScatterer creates a region scatterer.
 // RegionScatter is used for the `Lightning`, it will scatter the specified regions before import data.
-func NewRegionScatterer(ctx context.Context, cluster sche.SharedCluster, opController *operator.Controller, addSuspectRegions func(regionIDs ...uint64)) *RegionScatterer {
+func NewRegionScatterer(ctx context.Context, cluster sche.SharedCluster, opController *operator.Controller, addSuspectRegions func(bool, ...uint64)) *RegionScatterer {
 	return &RegionScatterer{
 		ctx:               ctx,
 		name:              regionScatterName,
@@ -165,7 +167,7 @@ func (r *RegionScatterer) ScatterRegionsByRange(startKey, endKey []byte, group s
 	regions := r.cluster.ScanRegions(startKey, endKey, -1)
 	if len(regions) < 1 {
 		scatterSkipEmptyRegionCounter.Inc()
-		return 0, nil, errors.New("empty region")
+		return 0, nil, errs.ErrEmptyRegion
 	}
 	failures := make(map[uint64]error, len(regions))
 	regionMap := make(map[uint64]*core.RegionInfo, len(regions))
@@ -184,7 +186,14 @@ func (r *RegionScatterer) ScatterRegionsByRange(startKey, endKey []byte, group s
 func (r *RegionScatterer) ScatterRegionsByID(regionsID []uint64, group string, retryLimit int, skipStoreLimit bool) (int, map[uint64]error, error) {
 	if len(regionsID) < 1 {
 		scatterSkipEmptyRegionCounter.Inc()
-		return 0, nil, errors.New("empty region")
+		return 0, nil, errs.ErrEmptyRegion
+	}
+	if len(regionsID) == 1 {
+		region := r.cluster.GetRegion(regionsID[0])
+		if region == nil {
+			scatterSkipNoRegionCounter.Inc()
+			return 0, nil, errs.ErrRegionNotFound
+		}
 	}
 	failures := make(map[uint64]error, len(regionsID))
 	regions := make([]*core.RegionInfo, 0, len(regionsID))
@@ -219,7 +228,7 @@ func (r *RegionScatterer) ScatterRegionsByID(regionsID []uint64, group string, r
 func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, failures map[uint64]error, group string, retryLimit int, skipStoreLimit bool) (int, error) {
 	if len(regions) < 1 {
 		scatterSkipEmptyRegionCounter.Inc()
-		return 0, errors.New("empty region")
+		return 0, errs.ErrEmptyRegion
 	}
 	if retryLimit > maxRetryLimit {
 		retryLimit = maxRetryLimit
@@ -246,7 +255,7 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 					continue
 				}
 				failpoint.Inject("scatterHbStreamsDrain", func() {
-					r.opController.GetHBStreams().Drain(1)
+					_ = r.opController.GetHBStreams().Drain(1)
 					r.opController.RemoveOperator(op, operator.AdminStop)
 				})
 			}
@@ -266,7 +275,7 @@ func (r *RegionScatterer) scatterRegions(regions map[uint64]*core.RegionInfo, fa
 // in a group level instead of cluster level.
 func (r *RegionScatterer) Scatter(region *core.RegionInfo, group string, skipStoreLimit bool) (*operator.Operator, error) {
 	if !filter.IsRegionReplicated(r.cluster, region) {
-		r.addSuspectRegions(region.GetID())
+		r.addSuspectRegions(false, region.GetID())
 		scatterSkipNotReplicatedCounter.Inc()
 		log.Warn("region not replicated during scatter", zap.Uint64("region-id", region.GetID()))
 		return nil, errors.Errorf("region %d is not fully replicated", region.GetID())
@@ -390,8 +399,8 @@ func (r *RegionScatterer) scatterRegion(region *core.RegionInfo, group string, s
 	if op != nil {
 		scatterSuccessCounter.Inc()
 		r.Put(targetPeers, targetLeader, group)
-		op.AdditionalInfos["group"] = group
-		op.AdditionalInfos["leader-picked-count"] = strconv.FormatUint(leaderStorePickedCount, 10)
+		op.SetAdditionalInfo("group", group)
+		op.SetAdditionalInfo("leader-picked-count", strconv.FormatUint(leaderStorePickedCount, 10))
 		op.SetPriorityLevel(constant.High)
 	}
 	return op, nil
@@ -428,7 +437,7 @@ func isSameDistribution(region *core.RegionInfo, targetPeers map[uint64]*metapb.
 
 // selectNewPeer return the new peer which pick the fewest picked count.
 // it keeps the origin peer if the origin store's pick count is equal the fewest pick.
-// it can be diveded into three steps:
+// it can be divided into three steps:
 // 1. found the max pick count and the min pick count.
 // 2. if max pick count equals min pick count, it means all store picked count are some, return the origin peer.
 // 3. otherwise, select the store which pick count is the min pick count and pass all filter.
@@ -516,22 +525,22 @@ func (r *RegionScatterer) Put(peers map[uint64]*metapb.Peer, leaderStoreID uint6
 		if engineFilter.Target(r.cluster.GetSharedConfig(), store).IsOK() {
 			r.ordinaryEngine.selectedPeer.Put(storeID, group)
 			scatterDistributionCounter.WithLabelValues(
-				fmt.Sprintf("%v", storeID),
-				fmt.Sprintf("%v", false),
+				strconv.FormatUint(storeID, 10),
+				strconv.FormatBool(false),
 				core.EngineTiKV).Inc()
 		} else {
 			engine := store.GetLabelValue(core.EngineKey)
 			ctx, _ := r.specialEngines.Load(engine)
 			ctx.(engineContext).selectedPeer.Put(storeID, group)
 			scatterDistributionCounter.WithLabelValues(
-				fmt.Sprintf("%v", storeID),
-				fmt.Sprintf("%v", false),
+				strconv.FormatUint(storeID, 10),
+				strconv.FormatBool(false),
 				engine).Inc()
 		}
 	}
 	r.ordinaryEngine.selectedLeader.Put(leaderStoreID, group)
 	scatterDistributionCounter.WithLabelValues(
-		fmt.Sprintf("%v", leaderStoreID),
-		fmt.Sprintf("%v", true),
+		strconv.FormatUint(leaderStoreID, 10),
+		strconv.FormatBool(true),
 		core.EngineTiKV).Inc()
 }

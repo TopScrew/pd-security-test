@@ -19,9 +19,12 @@ import (
 	"time"
 
 	"github.com/coreos/go-semver/semver"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
+
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
+	"github.com/tikv/pd/pkg/schedule/types"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 )
 
@@ -32,14 +35,8 @@ const RejectLeader = "reject-leader"
 var schedulerMap sync.Map
 
 // RegisterScheduler registers the scheduler type.
-func RegisterScheduler(typ string) {
+func RegisterScheduler(typ types.CheckerSchedulerType) {
 	schedulerMap.Store(typ, struct{}{})
-}
-
-// IsSchedulerRegistered checks if the named scheduler type is registered.
-func IsSchedulerRegistered(name string) bool {
-	_, ok := schedulerMap.Load(name)
-	return ok
 }
 
 // SchedulerConfigProvider is the interface for scheduler configurations.
@@ -49,9 +46,9 @@ type SchedulerConfigProvider interface {
 	SetSchedulingAllowanceStatus(bool, string)
 	GetStoresLimit() map[uint64]StoreLimitConfig
 
-	IsSchedulerDisabled(string) bool
-	AddSchedulerCfg(string, []string)
-	RemoveSchedulerCfg(string)
+	IsSchedulerDisabled(types.CheckerSchedulerType) bool
+	AddSchedulerCfg(types.CheckerSchedulerType, []string)
+	RemoveSchedulerCfg(types.CheckerSchedulerType)
 	Persist(endpoint.ConfigStorage) error
 
 	GetRegionScheduleLimit() uint64
@@ -88,6 +85,7 @@ type CheckerConfigProvider interface {
 	GetIsolationLevel() string
 	GetSplitMergeInterval() time.Duration
 	GetPatrolRegionInterval() time.Duration
+	GetPatrolRegionWorkerCount() int
 	GetMaxMergeRegionSize() uint64
 	GetMaxMergeRegionKeys() uint64
 	GetReplicaScheduleLimit() uint64

@@ -1,13 +1,27 @@
+// Copyright 2022 TiKV Project Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"github.com/brianvoe/gofakeit/v6"
-	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/stretchr/testify/require"
+
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 )
 
 func TestPatchResourceGroup(t *testing.T) {
@@ -31,44 +45,17 @@ func TestPatchResourceGroup(t *testing.T) {
 		re.NoError(err)
 		err = rg.PatchSettings(patch)
 		re.NoError(err)
-		res, err := json.Marshal(rg.Clone())
+		res, err := json.Marshal(rg.Clone(false))
 		re.NoError(err)
 		re.Equal(ca.expectJSONString, string(res))
 	}
 }
 
-func resetSizeCache(obj interface{}) {
-	resetSizeCacheRecursive(reflect.ValueOf(obj))
-}
-
-func resetSizeCacheRecursive(value reflect.Value) {
-	if value.Kind() == reflect.Ptr {
-		value = value.Elem()
-	}
-
-	if value.Kind() != reflect.Struct {
-		return
-	}
-
-	for i := 0; i < value.NumField(); i++ {
-		fieldValue := value.Field(i)
-		fieldType := value.Type().Field(i)
-
-		if fieldType.Name == "XXX_sizecache" && fieldType.Type.Kind() == reflect.Int32 {
-			fieldValue.SetInt(0)
-		} else {
-			resetSizeCacheRecursive(fieldValue)
-		}
-	}
-}
-
 func TestClone(t *testing.T) {
-	for i := 0; i <= 10; i++ {
+	for range 11 {
 		var rg ResourceGroup
 		gofakeit.Struct(&rg)
-		// hack to reset XXX_sizecache, gofakeit will random set this field but proto clone will not copy this field.
-		resetSizeCache(&rg)
-		rgClone := rg.Clone()
+		rgClone := rg.Clone(true)
 		require.EqualValues(t, &rg, rgClone)
 	}
 }

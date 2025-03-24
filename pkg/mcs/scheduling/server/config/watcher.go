@@ -20,42 +20,45 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coreos/go-semver/semver"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/log"
+
 	sc "github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/schedulers"
 	"github.com/tikv/pd/pkg/storage"
-	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
-	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/mvcc/mvccpb"
-	"go.uber.org/zap"
+	"github.com/tikv/pd/pkg/utils/keypath"
 )
 
-// Watcher is used to watch the PD API server for any configuration changes.
+// Watcher is used to watch the PD for any configuration changes.
 type Watcher struct {
 	wg     sync.WaitGroup
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// configPath is the path of the configuration in etcd:
-	//  - Key: /pd/{cluster_id}/config
-	//  - Value: configuration JSON.
-	configPath string
 	// schedulerConfigPathPrefix is the path prefix of the scheduler configuration in etcd:
 	//  - Key: /pd/{cluster_id}/scheduler_config/{scheduler_name}
 	//  - Value: configuration JSON.
 	schedulerConfigPathPrefix string
 
+	ttlConfigPrefix string
+
 	etcdClient             *clientv3.Client
 	configWatcher          *etcdutil.LoopWatcher
+	ttlConfigWatcher       *etcdutil.LoopWatcher
 	schedulerConfigWatcher *etcdutil.LoopWatcher
 
 	// Some data, like the global schedule config, should be loaded into `PersistConfig`.
 	*PersistConfig
 	// Some data, like the scheduler configs, should be loaded into the storage
 	// to make sure the coordinator could access them correctly.
+	// It is a memory storage.
 	storage storage.Storage
 	// schedulersController is used to trigger the scheduler's config reloading.
 	// Store as `*schedulers.Controller`.
@@ -69,11 +72,10 @@ type persistedConfig struct {
 	Store          sc.StoreConfig       `json:"store"`
 }
 
-// NewWatcher creates a new watcher to watch the config meta change from PD API server.
+// NewWatcher creates a new watcher to watch the config meta change from PD.
 func NewWatcher(
 	ctx context.Context,
 	etcdClient *clientv3.Client,
-	clusterID uint64,
 	persistConfig *PersistConfig,
 	storage storage.Storage,
 ) (*Watcher, error) {
@@ -81,13 +83,17 @@ func NewWatcher(
 	cw := &Watcher{
 		ctx:                       ctx,
 		cancel:                    cancel,
-		configPath:                endpoint.ConfigPath(clusterID),
-		schedulerConfigPathPrefix: endpoint.SchedulerConfigPathPrefix(clusterID),
+		ttlConfigPrefix:           sc.TTLConfigPrefix,
+		schedulerConfigPathPrefix: keypath.SchedulerConfigPathPrefix(),
 		etcdClient:                etcdClient,
 		PersistConfig:             persistConfig,
 		storage:                   storage,
 	}
 	err := cw.initializeConfigWatcher()
+	if err != nil {
+		return nil, err
+	}
+	err = cw.initializeTTLConfigWatcher()
 	if err != nil {
 		return nil, err
 	}
@@ -120,38 +126,72 @@ func (cw *Watcher) initializeConfigWatcher() error {
 			return err
 		}
 		log.Info("update scheduling config", zap.Reflect("new", cfg))
-		cw.AdjustScheduleCfg(&cfg.Schedule)
+		AdjustScheduleCfg(&cfg.Schedule)
 		cw.SetClusterVersion(&cfg.ClusterVersion)
 		cw.SetScheduleConfig(&cfg.Schedule)
 		cw.SetReplicationConfig(&cfg.Replication)
 		cw.SetStoreConfig(&cfg.Store)
 		return nil
 	}
-	deleteFn := func(kv *mvccpb.KeyValue) error {
-		return nil
-	}
-	postEventFn := func() error {
+	deleteFn := func(*mvccpb.KeyValue) error {
 		return nil
 	}
 	cw.configWatcher = etcdutil.NewLoopWatcher(
 		cw.ctx, &cw.wg,
 		cw.etcdClient,
-		"scheduling-config-watcher", cw.configPath,
-		putFn, deleteFn, postEventFn,
+		"scheduling-config-watcher",
+		// Watch configuration JSON
+		keypath.ConfigPath(),
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
+		false, /* withPrefix */
 	)
 	cw.configWatcher.StartWatchLoop()
 	return cw.configWatcher.WaitLoad()
 }
 
-func (cw *Watcher) initializeSchedulerConfigWatcher() error {
-	prefixToTrim := cw.schedulerConfigPathPrefix + "/"
+func (cw *Watcher) initializeTTLConfigWatcher() error {
 	putFn := func(kv *mvccpb.KeyValue) error {
-		name := strings.TrimPrefix(string(kv.Key), prefixToTrim)
-		log.Info("update scheduler config", zap.String("name", string(kv.Value)))
+		key := strings.TrimPrefix(string(kv.Key), sc.TTLConfigPrefix+"/")
+		value := string(kv.Value)
+		leaseID := kv.Lease
+		resp, err := cw.etcdClient.TimeToLive(cw.ctx, clientv3.LeaseID(leaseID))
+		if err != nil {
+			return err
+		}
+		log.Info("update scheduling ttl config", zap.String("key", key), zap.String("value", value))
+		cw.ttl.PutWithTTL(key, value, time.Duration(resp.TTL)*time.Second)
+		return nil
+	}
+	deleteFn := func(kv *mvccpb.KeyValue) error {
+		key := strings.TrimPrefix(string(kv.Key), sc.TTLConfigPrefix+"/")
+		cw.ttl.PutWithTTL(key, nil, 0)
+		return nil
+	}
+	cw.ttlConfigWatcher = etcdutil.NewLoopWatcher(
+		cw.ctx, &cw.wg,
+		cw.etcdClient,
+		"scheduling-ttl-config-watcher", cw.ttlConfigPrefix,
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
+		true, /* withPrefix */
+	)
+	cw.ttlConfigWatcher.StartWatchLoop()
+	return cw.ttlConfigWatcher.WaitLoad()
+}
+
+func (cw *Watcher) initializeSchedulerConfigWatcher() error {
+	putFn := func(kv *mvccpb.KeyValue) error {
+		key := string(kv.Key)
+		name := strings.TrimPrefix(key, cw.schedulerConfigPathPrefix)
+		log.Info("update scheduler config", zap.String("name", name),
+			zap.String("value", string(kv.Value)))
 		err := cw.storage.SaveSchedulerConfig(name, kv.Value)
 		if err != nil {
 			log.Warn("failed to save scheduler config",
-				zap.String("event-kv-key", string(kv.Key)),
+				zap.String("event-kv-key", key),
 				zap.String("trimmed-key", name),
 				zap.Error(err))
 			return err
@@ -163,20 +203,22 @@ func (cw *Watcher) initializeSchedulerConfigWatcher() error {
 		return nil
 	}
 	deleteFn := func(kv *mvccpb.KeyValue) error {
-		log.Info("remove scheduler config", zap.String("key", string(kv.Key)))
+		key := string(kv.Key)
+		log.Info("remove scheduler config", zap.String("key", key))
 		return cw.storage.RemoveSchedulerConfig(
-			strings.TrimPrefix(string(kv.Key), prefixToTrim),
+			strings.TrimPrefix(key, cw.schedulerConfigPathPrefix),
 		)
-	}
-	postEventFn := func() error {
-		return nil
 	}
 	cw.schedulerConfigWatcher = etcdutil.NewLoopWatcher(
 		cw.ctx, &cw.wg,
 		cw.etcdClient,
-		"scheduling-scheduler-config-watcher", cw.schedulerConfigPathPrefix,
-		putFn, deleteFn, postEventFn,
-		clientv3.WithPrefix(),
+		"scheduling-scheduler-config-watcher",
+		// To keep the consistency with the previous code, we should trim the suffix `/`.
+		strings.TrimSuffix(cw.schedulerConfigPathPrefix, "/"),
+		func([]*clientv3.Event) error { return nil },
+		putFn, deleteFn,
+		func([]*clientv3.Event) error { return nil },
+		true, /* withPrefix */
 	)
 	cw.schedulerConfigWatcher.StartWatchLoop()
 	return cw.schedulerConfigWatcher.WaitLoad()

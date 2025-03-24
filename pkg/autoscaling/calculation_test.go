@@ -23,13 +23,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
 )
 
 func TestGetScaledTiKVGroups(t *testing.T) {
-	t.Parallel()
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,7 +70,7 @@ func TestGetScaledTiKVGroups(t *testing.T) {
 		informer         core.StoreSetInformer
 		healthyInstances []instance
 		expectedPlan     []*Plan
-		errorChecker     func(err error, msgAndArgs ...interface{})
+		errorChecker     func(err error, msgAndArgs ...any)
 	}{
 		{
 			name:     "no scaled tikv group",
@@ -204,7 +204,7 @@ func TestGetScaledTiKVGroups(t *testing.T) {
 
 type mockQuerier struct{}
 
-func (q *mockQuerier) Query(options *QueryOptions) (QueryResult, error) {
+func (*mockQuerier) Query(options *QueryOptions) (QueryResult, error) {
 	result := make(QueryResult)
 	for _, addr := range options.addresses {
 		result[addr] = mockResultValue
@@ -214,7 +214,6 @@ func (q *mockQuerier) Query(options *QueryOptions) (QueryResult, error) {
 }
 
 func TestGetTotalCPUUseTime(t *testing.T) {
-	t.Parallel()
 	re := require.New(t)
 	querier := &mockQuerier{}
 	instances := []instance{
@@ -233,11 +232,10 @@ func TestGetTotalCPUUseTime(t *testing.T) {
 	}
 	totalCPUUseTime, _ := getTotalCPUUseTime(querier, TiDB, instances, time.Now(), 0)
 	expected := mockResultValue * float64(len(instances))
-	re.True(math.Abs(expected-totalCPUUseTime) < 1e-6)
+	re.Less(math.Abs(expected-totalCPUUseTime), 1e-6)
 }
 
 func TestGetTotalCPUQuota(t *testing.T) {
-	t.Parallel()
 	re := require.New(t)
 	querier := &mockQuerier{}
 	instances := []instance{
@@ -260,7 +258,6 @@ func TestGetTotalCPUQuota(t *testing.T) {
 }
 
 func TestScaleOutGroupLabel(t *testing.T) {
-	t.Parallel()
 	re := require.New(t)
 	var jsonStr = []byte(`
 {
@@ -303,7 +300,6 @@ func TestScaleOutGroupLabel(t *testing.T) {
 }
 
 func TestStrategyChangeCount(t *testing.T) {
-	t.Parallel()
 	re := require.New(t)
 	var count uint64 = 2
 	strategy := &Strategy{

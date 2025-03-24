@@ -18,13 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/core"
 )
 
-func TestFilterUnhealtyStore(t *testing.T) {
+func TestFilterUnhealthyStore(t *testing.T) {
 	re := require.New(t)
 	stats := NewStoresStats()
 	cluster := core.NewBasicCluster()

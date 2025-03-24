@@ -22,11 +22,13 @@ import (
 	"time"
 
 	"github.com/coreos/go-semver/semver"
+	clientv3 "go.etcd.io/etcd/client/v3"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/autoscaling"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/dashboard"
@@ -34,20 +36,19 @@ import (
 	"github.com/tikv/pd/pkg/id"
 	"github.com/tikv/pd/pkg/keyspace"
 	scheduling "github.com/tikv/pd/pkg/mcs/scheduling/server"
-	"github.com/tikv/pd/pkg/mcs/utils"
+	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/schedule/schedulers"
 	"github.com/tikv/pd/pkg/swaggerserver"
 	"github.com/tikv/pd/pkg/tso"
+	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
-	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/api"
 	"github.com/tikv/pd/server/apiv2"
 	"github.com/tikv/pd/server/cluster"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/server/join"
-	"go.etcd.io/etcd/clientv3"
 )
 
 // TestServer states.
@@ -78,16 +79,9 @@ type TestServer struct {
 var zapLogOnce sync.Once
 
 // NewTestServer creates a new TestServer.
-func NewTestServer(ctx context.Context, cfg *config.Config) (*TestServer, error) {
-	return createTestServer(ctx, cfg, nil)
-}
-
-// NewTestAPIServer creates a new TestServer.
-func NewTestAPIServer(ctx context.Context, cfg *config.Config) (*TestServer, error) {
-	return createTestServer(ctx, cfg, []string{utils.APIServiceName})
-}
-
-func createTestServer(ctx context.Context, cfg *config.Config, services []string) (*TestServer, error) {
+func NewTestServer(ctx context.Context, cfg *config.Config, services []string) (*TestServer, error) {
+	//  disable the heartbeat async runner in test
+	cfg.Schedule.EnableHeartbeatConcurrentRunner = false
 	err := logutil.SetupLogger(&cfg.Log, &cfg.Logger, &cfg.LogProps, cfg.Security.RedactInfoLog)
 	if err != nil {
 		return nil, err
@@ -184,11 +178,6 @@ func (s *TestServer) GetConfig() *config.Config {
 	return s.server.GetConfig()
 }
 
-// SetEnableLocalTSO sets the enable-local-tso flag of the TestServer.
-func (s *TestServer) SetEnableLocalTSO(enableLocalTSO bool) {
-	s.server.SetEnableLocalTSO(enableLocalTSO)
-}
-
 // GetPersistOptions returns the current TestServer's schedule option.
 func (s *TestServer) GetPersistOptions() *config.PersistOptions {
 	s.RLock()
@@ -218,10 +207,8 @@ func (s *TestServer) GetServer() *server.Server {
 }
 
 // GetClusterID returns the cluster ID.
-func (s *TestServer) GetClusterID() uint64 {
-	s.RLock()
-	defer s.RUnlock()
-	return s.server.ClusterID()
+func (*TestServer) GetClusterID() uint64 {
+	return keypath.ClusterID()
 }
 
 // GetLeader returns current leader of PD cluster.
@@ -229,21 +216,6 @@ func (s *TestServer) GetLeader() *pdpb.Member {
 	s.RLock()
 	defer s.RUnlock()
 	return s.server.GetLeader()
-}
-
-// GetAllocatorLeader returns current allocator leader
-// of PD cluster for given dc-location.
-func (s *TestServer) GetAllocatorLeader(dcLocation string) *pdpb.Member {
-	// For the leader of Global TSO Allocator, it's the PD leader
-	if dcLocation == tso.GlobalDCLocation {
-		return s.GetLeader()
-	}
-	tsoAllocatorManager := s.GetTSOAllocatorManager()
-	allocator, err := tsoAllocatorManager.GetAllocator(dcLocation)
-	if err != nil {
-		return nil
-	}
-	return allocator.(*tso.LocalTSOAllocator).GetAllocatorLeader()
 }
 
 // GetKeyspaceManager returns the current TestServer's Keyspace Manager.
@@ -288,24 +260,11 @@ func (s *TestServer) IsLeader() bool {
 	return !s.server.IsClosed() && s.server.GetMember().IsLeader()
 }
 
-// IsAllocatorLeader returns whether the server is a TSO Allocator leader or not.
-func (s *TestServer) IsAllocatorLeader(dcLocation string) bool {
-	if dcLocation == tso.GlobalDCLocation {
-		return s.IsLeader()
-	}
-	tsoAllocatorManager := s.GetTSOAllocatorManager()
-	allocator, err := tsoAllocatorManager.GetAllocator(dcLocation)
-	if err != nil {
-		return false
-	}
-	return !s.server.IsClosed() && allocator.(*tso.LocalTSOAllocator).IsAllocatorLeader()
-}
-
 // GetEtcdLeader returns the builtin etcd leader.
 func (s *TestServer) GetEtcdLeader() (string, error) {
 	s.RLock()
 	defer s.RUnlock()
-	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: s.server.ClusterID()}}
+	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}}
 	members, _ := s.grpcServer.GetMembers(context.TODO(), req)
 	if members.Header.GetError() != nil {
 		return "", errors.WithStack(errors.New(members.Header.GetError().String()))
@@ -317,7 +276,7 @@ func (s *TestServer) GetEtcdLeader() (string, error) {
 func (s *TestServer) GetEtcdLeaderID() (uint64, error) {
 	s.RLock()
 	defer s.RUnlock()
-	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: s.server.ClusterID()}}
+	req := &pdpb.GetMembersRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}}
 	members, err := s.grpcServer.GetMembers(context.TODO(), req)
 	if err != nil {
 		return 0, errors.WithStack(err)
@@ -410,7 +369,7 @@ func (s *TestServer) GetStoreRegions(storeID uint64) []*core.RegionInfo {
 // BootstrapCluster is used to bootstrap the cluster.
 func (s *TestServer) BootstrapCluster() error {
 	bootstrapReq := &pdpb.BootstrapRequest{
-		Header: &pdpb.RequestHeader{ClusterId: s.GetClusterID()},
+		Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()},
 		Store:  &metapb.Store{Id: 1, Address: "mock://1", LastHeartbeat: time.Now().UnixNano()},
 		Region: &metapb.Region{Id: 2, Peers: []*metapb.Peer{{Id: 3, StoreId: 1, Role: metapb.PeerRole_Voter}}},
 	}
@@ -428,7 +387,7 @@ func (s *TestServer) BootstrapCluster() error {
 // make a test know the PD leader has been elected as soon as possible.
 // If it exceeds the maximum number of loops, it will return nil.
 func (s *TestServer) WaitLeader() bool {
-	for i := 0; i < WaitLeaderRetryTimes; i++ {
+	for range WaitLeaderRetryTimes {
 		if s.server.GetMember().IsLeader() {
 			return true
 		}
@@ -467,15 +426,15 @@ type ConfigOption func(conf *config.Config, serverName string)
 
 // NewTestCluster creates a new TestCluster.
 func NewTestCluster(ctx context.Context, initialServerCount int, opts ...ConfigOption) (*TestCluster, error) {
-	return createTestCluster(ctx, initialServerCount, false, opts...)
+	return createTestCluster(ctx, initialServerCount, nil, opts...)
 }
 
-// NewTestAPICluster creates a new TestCluster with API service.
-func NewTestAPICluster(ctx context.Context, initialServerCount int, opts ...ConfigOption) (*TestCluster, error) {
-	return createTestCluster(ctx, initialServerCount, true, opts...)
+// NewTestClusterWithKeyspaceGroup creates a new TestCluster with PD.
+func NewTestClusterWithKeyspaceGroup(ctx context.Context, initialServerCount int, opts ...ConfigOption) (*TestCluster, error) {
+	return createTestCluster(ctx, initialServerCount, []string{constant.PDServiceName}, opts...)
 }
 
-func createTestCluster(ctx context.Context, initialServerCount int, isAPIServiceMode bool, opts ...ConfigOption) (*TestCluster, error) {
+func createTestCluster(ctx context.Context, initialServerCount int, services []string, opts ...ConfigOption) (*TestCluster, error) {
 	schedulers.Register()
 	config := newClusterConfig(initialServerCount)
 	servers := make(map[string]*TestServer)
@@ -484,12 +443,7 @@ func createTestCluster(ctx context.Context, initialServerCount int, isAPIService
 		if err != nil {
 			return nil, err
 		}
-		var s *TestServer
-		if isAPIServiceMode {
-			s, err = NewTestAPIServer(ctx, serverConf)
-		} else {
-			s, err = NewTestServer(ctx, serverConf)
-		}
+		s, err := NewTestServer(ctx, serverConf, services)
 		if err != nil {
 			return nil, err
 		}
@@ -507,13 +461,13 @@ func createTestCluster(ctx context.Context, initialServerCount int, isAPIService
 	}, nil
 }
 
-// RestartTestAPICluster restarts the API test cluster.
-func RestartTestAPICluster(ctx context.Context, cluster *TestCluster) (*TestCluster, error) {
+// RestartTestPDCluster restarts the PD test cluster.
+func RestartTestPDCluster(ctx context.Context, cluster *TestCluster) (*TestCluster, error) {
 	return restartTestCluster(ctx, cluster, true)
 }
 
 func restartTestCluster(
-	ctx context.Context, cluster *TestCluster, isAPIServiceMode bool,
+	ctx context.Context, cluster *TestCluster, isKeyspaceGroupEnabled bool,
 ) (newTestCluster *TestCluster, err error) {
 	schedulers.Register()
 	newTestCluster = &TestCluster{
@@ -540,10 +494,10 @@ func restartTestCluster(
 				newServer *TestServer
 				serverErr error
 			)
-			if isAPIServiceMode {
-				newServer, serverErr = NewTestAPIServer(ctx, serverCfg)
+			if isKeyspaceGroupEnabled {
+				newServer, serverErr = NewTestServer(ctx, serverCfg, []string{constant.PDServiceName})
 			} else {
-				newServer, serverErr = NewTestServer(ctx, serverCfg)
+				newServer, serverErr = NewTestServer(ctx, serverCfg, nil)
 			}
 			serverMap.Store(serverName, newServer)
 			errorMap.Store(serverName, serverErr)
@@ -551,7 +505,7 @@ func restartTestCluster(
 	}
 	wg.Wait()
 
-	errorMap.Range(func(key, value interface{}) bool {
+	errorMap.Range(func(key, value any) bool {
 		if value != nil {
 			err = value.(error)
 			return false
@@ -570,17 +524,17 @@ func restartTestCluster(
 }
 
 // RunServer starts to run TestServer.
-func (c *TestCluster) RunServer(server *TestServer) <-chan error {
+func RunServer(server *TestServer) <-chan error {
 	resC := make(chan error)
 	go func() { resC <- server.Run() }()
 	return resC
 }
 
 // RunServers starts to run multiple TestServer.
-func (c *TestCluster) RunServers(servers []*TestServer) error {
+func RunServers(servers []*TestServer) error {
 	res := make([]<-chan error, len(servers))
 	for i, s := range servers {
-		res[i] = c.RunServer(s)
+		res[i] = RunServer(s)
 	}
 	for _, c := range res {
 		if err := <-c; err != nil {
@@ -596,7 +550,7 @@ func (c *TestCluster) RunInitialServers() error {
 	for _, conf := range c.config.InitialServers {
 		servers = append(servers, c.GetServer(conf.Name))
 	}
-	return c.RunServers(servers)
+	return RunServers(servers)
 }
 
 // StopAll is used to stop all servers.
@@ -607,6 +561,11 @@ func (c *TestCluster) StopAll() error {
 		}
 	}
 	return nil
+}
+
+// DeleteServer is used to delete a server.
+func (c *TestCluster) DeleteServer(name string) {
+	delete(c.servers, name)
 }
 
 // GetServer returns a server with a given name.
@@ -654,7 +613,7 @@ func (c *TestCluster) WaitLeader(ops ...WaitOption) string {
 	for _, op := range ops {
 		op(option)
 	}
-	for i := 0; i < option.retryTimes; i++ {
+	for range option.retryTimes {
 		counter := make(map[string]int)
 		running := 0
 		for _, s := range c.servers {
@@ -686,7 +645,7 @@ func (c *TestCluster) WaitRegionSyncerClientsReady(n int) bool {
 		retryTimes:   40,
 		waitInterval: WaitLeaderCheckInterval,
 	}
-	for i := 0; i < option.retryTimes; i++ {
+	for range option.retryTimes {
 		name := c.GetLeader()
 		if len(name) == 0 {
 			time.Sleep(option.waitInterval)
@@ -711,56 +670,6 @@ func (c *TestCluster) ResignLeader() error {
 		return c.servers[leader].ResignLeader()
 	}
 	return errors.New("no leader")
-}
-
-// WaitAllocatorLeader is used to get the Local TSO Allocator leader.
-// If it exceeds the maximum number of loops, it will return an empty string.
-func (c *TestCluster) WaitAllocatorLeader(dcLocation string, ops ...WaitOption) string {
-	option := &WaitOp{
-		retryTimes:   WaitLeaderRetryTimes,
-		waitInterval: WaitLeaderCheckInterval,
-	}
-	for _, op := range ops {
-		op(option)
-	}
-	for i := 0; i < option.retryTimes; i++ {
-		counter := make(map[string]int)
-		running := 0
-		for _, s := range c.servers {
-			if s.state == Running && s.GetTSOAllocatorManager().EnableLocalTSO() {
-				running++
-			}
-			serverName := s.GetAllocatorLeader(dcLocation).GetName()
-			if serverName != "" {
-				counter[serverName]++
-			}
-		}
-		for serverName, num := range counter {
-			if num == running && c.GetServer(serverName).IsAllocatorLeader(dcLocation) {
-				return serverName
-			}
-		}
-		time.Sleep(option.waitInterval)
-	}
-	return ""
-}
-
-// WaitAllLeaders will block and wait for the election of PD leader and all Local TSO Allocator leaders.
-func (c *TestCluster) WaitAllLeaders(re *require.Assertions, dcLocations map[string]string) {
-	c.WaitLeader()
-	c.CheckClusterDCLocation()
-	// Wait for each DC's Local TSO Allocator leader
-	wg := sync.WaitGroup{}
-	for _, dcLocation := range dcLocations {
-		wg.Add(1)
-		go func(dc string) {
-			testutil.Eventually(re, func() bool {
-				return c.WaitAllocatorLeader(dc) != ""
-			})
-			wg.Done()
-		}(dcLocation)
-	}
-	wg.Wait()
 }
 
 // GetCluster returns PD cluster.
@@ -808,11 +717,11 @@ func (c *TestCluster) HandleReportBuckets(b *metapb.Buckets) error {
 
 // Join is used to add a new TestServer into the cluster.
 func (c *TestCluster) Join(ctx context.Context, opts ...ConfigOption) (*TestServer, error) {
-	conf, err := c.config.Join().Generate(opts...)
+	conf, err := c.config.join().Generate(opts...)
 	if err != nil {
 		return nil, err
 	}
-	s, err := NewTestServer(ctx, conf)
+	s, err := NewTestServer(ctx, conf, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -820,13 +729,13 @@ func (c *TestCluster) Join(ctx context.Context, opts ...ConfigOption) (*TestServ
 	return s, nil
 }
 
-// JoinAPIServer is used to add a new TestAPIServer into the cluster.
-func (c *TestCluster) JoinAPIServer(ctx context.Context, opts ...ConfigOption) (*TestServer, error) {
-	conf, err := c.config.Join().Generate(opts...)
+// JoinWithKeyspaceGroup is used to add a new TestServer into the cluster with keyspace group enabled.
+func (c *TestCluster) JoinWithKeyspaceGroup(ctx context.Context, opts ...ConfigOption) (*TestServer, error) {
+	conf, err := c.config.join().Generate(opts...)
 	if err != nil {
 		return nil, err
 	}
-	s, err := NewTestAPIServer(ctx, conf)
+	s, err := NewTestServer(ctx, conf, []string{constant.PDServiceName})
 	if err != nil {
 		return nil, err
 	}
@@ -845,19 +754,6 @@ func (c *TestCluster) Destroy() {
 	if c.schedulingCluster != nil {
 		c.schedulingCluster.Destroy()
 	}
-}
-
-// CheckClusterDCLocation will force the cluster to do the dc-location check in order to speed up the test.
-func (c *TestCluster) CheckClusterDCLocation() {
-	wg := sync.WaitGroup{}
-	for _, server := range c.GetServers() {
-		wg.Add(1)
-		go func(ser *TestServer) {
-			ser.GetTSOAllocatorManager().ClusterDCLocationChecker()
-			wg.Done()
-		}(server)
-	}
-	wg.Wait()
 }
 
 // CheckTSOUnique will check whether the TSO is unique among the cluster in the past and present.

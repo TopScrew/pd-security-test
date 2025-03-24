@@ -16,14 +16,17 @@ package testutil
 
 import (
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
 )
 
 const (
@@ -92,7 +95,7 @@ func CleanServer(dataDir string) {
 // InitTempFileLogger initializes the logger and redirects the log output to a temporary file.
 func InitTempFileLogger(level string) (fname string) {
 	cfg := &log.Config{}
-	f, _ := os.CreateTemp("/tmp", "pd_tests")
+	f, _ := os.CreateTemp("", "pd_tests")
 	fname = f.Name()
 	f.Close()
 	cfg.File.Filename = fname
@@ -100,4 +103,25 @@ func InitTempFileLogger(level string) (fname string) {
 	lg, p, _ := log.InitLogger(cfg)
 	log.ReplaceGlobals(lg, p)
 	return fname
+}
+
+// GenerateTestDataConcurrently generates test data concurrently.
+func GenerateTestDataConcurrently(count int, f func(int)) {
+	var wg sync.WaitGroup
+	tasks := make(chan int, count)
+	workers := runtime.NumCPU()
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range tasks {
+				f(i)
+			}
+		}()
+	}
+	for i := range count {
+		tasks <- i
+	}
+	close(tasks)
+	wg.Wait()
 }

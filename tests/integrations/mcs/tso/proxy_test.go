@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,25 +24,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/pd/client/tsoutil"
-	"github.com/tikv/pd/pkg/utils/testutil"
-	"github.com/tikv/pd/tests"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
+
+	"github.com/tikv/pd/client/pkg/utils/tsoutil"
+	"github.com/tikv/pd/pkg/utils/testutil"
+	"github.com/tikv/pd/tests"
 )
 
 type tsoProxyTestSuite struct {
 	suite.Suite
 	ctx              context.Context
 	cancel           context.CancelFunc
-	apiCluster       *tests.TestCluster
-	apiLeader        *tests.TestServer
+	cluster          *tests.TestCluster
+	leader           *tests.TestServer
 	backendEndpoints string
 	tsoCluster       *tests.TestTSOCluster
 	defaultReq       *pdpb.TsoRequest
@@ -60,14 +62,15 @@ func (s *tsoProxyTestSuite) SetupSuite() {
 	var err error
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	// Create an API cluster with 1 server
-	s.apiCluster, err = tests.NewTestAPICluster(s.ctx, 1)
+	s.cluster, err = tests.NewTestClusterWithKeyspaceGroup(s.ctx, 1)
 	re.NoError(err)
-	err = s.apiCluster.RunInitialServers()
+	err = s.cluster.RunInitialServers()
 	re.NoError(err)
-	leaderName := s.apiCluster.WaitLeader()
-	s.apiLeader = s.apiCluster.GetServer(leaderName)
-	s.backendEndpoints = s.apiLeader.GetAddr()
-	s.NoError(s.apiLeader.BootstrapCluster())
+	leaderName := s.cluster.WaitLeader()
+	re.NotEmpty(leaderName)
+	s.leader = s.cluster.GetServer(leaderName)
+	s.backendEndpoints = s.leader.GetAddr()
+	re.NoError(s.leader.BootstrapCluster())
 
 	// Create a TSO cluster with 2 servers
 	s.tsoCluster, err = tests.NewTestTSOCluster(s.ctx, 2, s.backendEndpoints)
@@ -75,7 +78,7 @@ func (s *tsoProxyTestSuite) SetupSuite() {
 	s.tsoCluster.WaitForDefaultPrimaryServing(re)
 
 	s.defaultReq = &pdpb.TsoRequest{
-		Header: &pdpb.RequestHeader{ClusterId: s.apiLeader.GetClusterID()},
+		Header: &pdpb.RequestHeader{ClusterId: s.leader.GetClusterID()},
 		Count:  1,
 	}
 
@@ -84,9 +87,9 @@ func (s *tsoProxyTestSuite) SetupSuite() {
 }
 
 func (s *tsoProxyTestSuite) TearDownSuite() {
-	s.cleanupGRPCStreams(s.cleanupFuncs)
+	cleanupGRPCStreams(s.cleanupFuncs)
 	s.tsoCluster.Destroy()
-	s.apiCluster.Destroy()
+	s.cluster.Destroy()
 	s.cancel()
 }
 
@@ -107,15 +110,15 @@ func (s *tsoProxyTestSuite) TestTSOProxyWorksWithCancellation() {
 		defer wg.Done()
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				streams, cleanupFuncs := createTSOStreams(s.ctx, re, s.backendEndpoints, 10)
-				for j := 0; j < 10; j++ {
+				for range 10 {
 					s.verifyTSOProxy(s.ctx, streams, cleanupFuncs, 10, true)
 				}
-				s.cleanupGRPCStreams(cleanupFuncs)
+				cleanupGRPCStreams(cleanupFuncs)
 			}
 		}()
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			s.verifyTSOProxy(s.ctx, s.streams, s.cleanupFuncs, 10, true)
 		}
 	}()
@@ -125,7 +128,7 @@ func (s *tsoProxyTestSuite) TestTSOProxyWorksWithCancellation() {
 // TestTSOProxyStress tests the TSO Proxy can work correctly under the stress. gPRC and TSO failures are allowed,
 // but the TSO Proxy should not panic, blocked or deadlocked, and if it returns a timestamp, it should be a valid
 // timestamp monotonic increasing. After the stress, the TSO Proxy should still work correctly.
-func TestTSOProxyStress(t *testing.T) {
+func TestTSOProxyStress(_ *testing.T) {
 	s := new(tsoProxyTestSuite)
 	s.SetT(&testing.T{})
 	s.SetupSuite()
@@ -145,7 +148,7 @@ func TestTSOProxyStress(t *testing.T) {
 	defer cancel()
 
 	// Push load from many concurrent clients in multiple rounds and increase the #client each round.
-	for i := 0; i < totalRounds; i++ {
+	for i := range totalRounds {
 		log.Info("start a new round of stress test",
 			zap.Int("round-id", i), zap.Int("clients-count", len(streams)+clientsIncr))
 		streamsTemp, cleanupFuncsTemp :=
@@ -154,7 +157,7 @@ func TestTSOProxyStress(t *testing.T) {
 		cleanupFuncs = append(cleanupFuncs, cleanupFuncsTemp...)
 		s.verifyTSOProxy(ctxTimeout, streams, cleanupFuncs, 50, false)
 	}
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 	log.Info("the stress test completed.")
 
 	// Verify the TSO Proxy can still work correctly after the stress.
@@ -177,7 +180,7 @@ func (s *tsoProxyTestSuite) TestTSOProxyClientsWithSameContext() {
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
-	for i := 0; i < clientCount; i++ {
+	for i := range clientCount {
 		conn, err := grpc.Dial(strings.TrimPrefix(s.backendEndpoints, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 		re.NoError(err)
 		grpcPDClient := pdpb.NewPDClient(conn)
@@ -192,7 +195,7 @@ func (s *tsoProxyTestSuite) TestTSOProxyClientsWithSameContext() {
 	}
 
 	s.verifyTSOProxy(ctx, streams, cleanupFuncs, 100, true)
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 }
 
 // TestTSOProxyRecvFromClientTimeout tests the TSO Proxy can properly close the grpc stream on the server side
@@ -207,7 +210,7 @@ func (s *tsoProxyTestSuite) TestTSOProxyRecvFromClientTimeout() {
 	time.Sleep(2 * time.Second)
 	err := streams[0].Send(s.defaultReq)
 	re.Error(err)
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/tsoProxyRecvFromClientTimeout"))
 
 	// Verify the streams with no fault injection can work correctly.
@@ -226,7 +229,7 @@ func (s *tsoProxyTestSuite) TestTSOProxyFailToSendToClient() {
 	re.NoError(err)
 	_, err = streams[0].Recv()
 	re.Error(err)
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/tsoProxyFailToSendToClient"))
 
 	s.verifyTSOProxy(s.ctx, s.streams, s.cleanupFuncs, 1, true)
@@ -244,7 +247,7 @@ func (s *tsoProxyTestSuite) TestTSOProxySendToTSOTimeout() {
 	re.NoError(err)
 	_, err = streams[0].Recv()
 	re.Error(err)
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/tsoProxySendToTSOTimeout"))
 
 	s.verifyTSOProxy(s.ctx, s.streams, s.cleanupFuncs, 1, true)
@@ -262,13 +265,13 @@ func (s *tsoProxyTestSuite) TestTSOProxyRecvFromTSOTimeout() {
 	re.NoError(err)
 	_, err = streams[0].Recv()
 	re.Error(err)
-	s.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/tsoProxyRecvFromTSOTimeout"))
 
 	s.verifyTSOProxy(s.ctx, s.streams, s.cleanupFuncs, 1, true)
 }
 
-func (s *tsoProxyTestSuite) cleanupGRPCStreams(cleanupFuncs []testutil.CleanupFunc) {
+func cleanupGRPCStreams(cleanupFuncs []testutil.CleanupFunc) {
 	for i := 0; i < len(cleanupFuncs); i++ {
 		if cleanupFuncs[i] != nil {
 			cleanupFuncs[i]()
@@ -277,7 +280,7 @@ func (s *tsoProxyTestSuite) cleanupGRPCStreams(cleanupFuncs []testutil.CleanupFu
 	}
 }
 
-func (s *tsoProxyTestSuite) cleanupGRPCStream(
+func cleanupGRPCStream(
 	streams []pdpb.PD_TsoClient, cleanupFuncs []testutil.CleanupFunc, index int,
 ) {
 	if cleanupFuncs[index] != nil {
@@ -307,7 +310,7 @@ func (s *tsoProxyTestSuite) verifyTSOProxy(
 	var respErr atomic.Value
 
 	wg := &sync.WaitGroup{}
-	for i := 0; i < len(streams); i++ {
+	for i := range streams {
 		if streams[i] == nil {
 			continue
 		}
@@ -315,10 +318,10 @@ func (s *tsoProxyTestSuite) verifyTSOProxy(
 		go func(i int) {
 			defer wg.Done()
 			lastPhysical, lastLogical := int64(0), int64(0)
-			for j := 0; j < requestsPerClient; j++ {
+			for range requestsPerClient {
 				select {
 				case <-ctx.Done():
-					s.cleanupGRPCStream(streams, cleanupFuncs, i)
+					cleanupGRPCStream(streams, cleanupFuncs, i)
 					return
 				default:
 				}
@@ -327,22 +330,22 @@ func (s *tsoProxyTestSuite) verifyTSOProxy(
 				err := streams[i].Send(req)
 				if err != nil && !mustReliable {
 					respErr.Store(err)
-					s.cleanupGRPCStream(streams, cleanupFuncs, i)
+					cleanupGRPCStream(streams, cleanupFuncs, i)
 					return
 				}
 				re.NoError(err)
 				resp, err := streams[i].Recv()
 				if err != nil && !mustReliable {
 					respErr.Store(err)
-					s.cleanupGRPCStream(streams, cleanupFuncs, i)
+					cleanupGRPCStream(streams, cleanupFuncs, i)
 					return
 				}
 				re.NoError(err)
 				re.Equal(req.GetCount(), resp.GetCount())
 				ts := resp.GetTimestamp()
 				count := int64(resp.GetCount())
-				physical, largestLogic, suffixBits := ts.GetPhysical(), ts.GetLogical(), ts.GetSuffixBits()
-				firstLogical := tsoutil.AddLogical(largestLogic, -count+1, suffixBits)
+				physical, largestLogic := ts.GetPhysical(), ts.GetLogical()
+				firstLogical := largestLogic - count + 1
 				re.False(tsoutil.TSLessEqual(physical, firstLogical, lastPhysical, lastLogical))
 			}
 		}(i)
@@ -357,9 +360,9 @@ func (s *tsoProxyTestSuite) verifyTSOProxy(
 
 func (s *tsoProxyTestSuite) generateRequests(requestsPerClient int) []*pdpb.TsoRequest {
 	reqs := make([]*pdpb.TsoRequest, requestsPerClient)
-	for i := 0; i < requestsPerClient; i++ {
+	for i := range requestsPerClient {
 		reqs[i] = &pdpb.TsoRequest{
-			Header: &pdpb.RequestHeader{ClusterId: s.apiLeader.GetClusterID()},
+			Header: &pdpb.RequestHeader{ClusterId: s.leader.GetClusterID()},
 			Count:  uint32(i) + 1, // Make sure the count is positive.
 		}
 	}
@@ -375,7 +378,7 @@ func createTSOStreams(
 	cleanupFuncs := make([]testutil.CleanupFunc, clientCount)
 	streams := make([]pdpb.PD_TsoClient, clientCount)
 
-	for i := 0; i < clientCount; i++ {
+	for i := range clientCount {
 		conn, err := grpc.Dial(strings.TrimPrefix(backendEndpoints, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 		re.NoError(err)
 		grpcPDClient := pdpb.NewPDClient(conn)
@@ -406,7 +409,7 @@ func tsoProxy(
 			wg.Add(1)
 			go func(index int, streamCopy pdpb.PD_TsoClient) {
 				defer wg.Done()
-				for i := 0; i < requestsPerClient; i++ {
+				for range requestsPerClient {
 					if err := streamCopy.Send(tsoReq); err != nil {
 						errsReturned[index] = err
 						return
@@ -425,7 +428,7 @@ func tsoProxy(
 		}
 	} else {
 		for _, stream := range streams {
-			for i := 0; i < requestsPerClient; i++ {
+			for range requestsPerClient {
 				if err := stream.Send(tsoReq); err != nil {
 					return err
 				}
@@ -487,7 +490,7 @@ func benchmarkTSOProxyNClients(clientCount int, b *testing.B) {
 			builder.WriteString("SequentialClients_")
 		}
 		b.Run(fmt.Sprintf("%s_%dReqsPerClient", builder.String(), t.requestsPerClient), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				err := tsoProxy(suite.defaultReq, streams, t.concurrentClient, t.requestsPerClient)
 				re.NoError(err)
 			}
@@ -495,7 +498,7 @@ func benchmarkTSOProxyNClients(clientCount int, b *testing.B) {
 	}
 	b.StopTimer()
 
-	suite.cleanupGRPCStreams(cleanupFuncs)
+	cleanupGRPCStreams(cleanupFuncs)
 
 	suite.TearDownSuite()
 }

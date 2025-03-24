@@ -19,8 +19,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/pingcap/errors"
 	"github.com/spf13/cobra"
+
+	"github.com/pingcap/errors"
 )
 
 var (
@@ -158,7 +159,7 @@ func transferLeaderCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["to_store_id"] = ids[1]
@@ -192,7 +193,7 @@ func transferRegionCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["to_store_ids"] = ids[1:]
@@ -224,7 +225,7 @@ func transferPeerCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["from_store_id"] = ids[1]
@@ -254,7 +255,7 @@ func addPeerCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["store_id"] = ids[1]
@@ -283,7 +284,7 @@ func addLearnerCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["store_id"] = ids[1]
@@ -312,7 +313,7 @@ func mergeRegionCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["source_region_id"] = ids[0]
 	input["target_region_id"] = ids[1]
@@ -341,7 +342,7 @@ func removePeerCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["store_id"] = ids[1]
@@ -375,13 +376,12 @@ func splitRegionCommandFunc(cmd *cobra.Command, args []string) {
 	policy := cmd.Flags().Lookup("policy").Value.String()
 	switch policy {
 	case "scan", "approximate", "usekey":
-		break
 	default:
 		cmd.Println("Error: unknown policy")
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	input["policy"] = policy
@@ -415,7 +415,7 @@ func scatterRegionCommandFunc(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	input := make(map[string]interface{})
+	input := make(map[string]any)
 	input["name"] = cmd.Name()
 	input["region_id"] = ids[0]
 	postJSON(cmd, operatorsPrefix, input)

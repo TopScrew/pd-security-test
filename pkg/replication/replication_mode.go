@@ -24,9 +24,12 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	pb "github.com/pingcap/kvproto/pkg/replication_modepb"
 	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
@@ -35,7 +38,6 @@ import (
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/server/config"
-	"go.uber.org/zap"
 )
 
 const (
@@ -236,7 +238,7 @@ func (m *ModeManager) drSwitchToAsyncWait(availableStores []uint64) error {
 	m.Lock()
 	defer m.Unlock()
 
-	id, err := m.cluster.AllocID()
+	id, _, err := m.cluster.AllocID(1)
 	if err != nil {
 		log.Warn("failed to switch to async wait state", zap.String("replicate-mode", modeDRAutoSync), errs.ZapError(err))
 		return err
@@ -258,7 +260,7 @@ func (m *ModeManager) drSwitchToAsync(availableStores []uint64) error {
 }
 
 func (m *ModeManager) drSwitchToAsyncWithLock(availableStores []uint64) error {
-	id, err := m.cluster.AllocID()
+	id, _, err := m.cluster.AllocID(1)
 	if err != nil {
 		log.Warn("failed to switch to async state", zap.String("replicate-mode", modeDRAutoSync), errs.ZapError(err))
 		return err
@@ -290,7 +292,7 @@ func (m *ModeManager) drSwitchToSyncRecover() error {
 }
 
 func (m *ModeManager) drSwitchToSyncRecoverWithLock() error {
-	id, err := m.cluster.AllocID()
+	id, _, err := m.cluster.AllocID(1)
 	if err != nil {
 		log.Warn("failed to switch to sync_recover state", zap.String("replicate-mode", modeDRAutoSync), errs.ZapError(err))
 		return err
@@ -310,7 +312,7 @@ func (m *ModeManager) drSwitchToSyncRecoverWithLock() error {
 func (m *ModeManager) drSwitchToSync() error {
 	m.Lock()
 	defer m.Unlock()
-	id, err := m.cluster.AllocID()
+	id, _, err := m.cluster.AllocID(1)
 	if err != nil {
 		log.Warn("failed to switch to sync state", zap.String("replicate-mode", modeDRAutoSync), errs.ZapError(err))
 		return err
@@ -345,6 +347,7 @@ func (m *ModeManager) Run(ctx context.Context) {
 	select {
 	case <-timer.C:
 	case <-ctx.Done():
+		log.Info("replication mode manager is stopped")
 		return
 	}
 
@@ -366,7 +369,10 @@ func (m *ModeManager) Run(ctx context.Context) {
 	}()
 
 	go func() {
-		defer wg.Done()
+		defer func() {
+			wg.Done()
+			drStateGauge.Set(0)
+		}()
 		ticker := time.NewTicker(replicateStateInterval)
 		defer ticker.Stop()
 		for {
@@ -380,6 +386,7 @@ func (m *ModeManager) Run(ctx context.Context) {
 	}()
 
 	wg.Wait()
+	log.Info("replication mode manager is stopped")
 }
 
 func minimalUpVoters(rule *placement.Rule, upStores, downStores []*core.StoreInfo) int {
@@ -442,15 +449,6 @@ func (m *ModeManager) tickUpdateState() {
 	canSync := primaryHasVoter && drHasVoter
 	hasMajority := totalUpVoter*2 > totalVoter
 
-	log.Debug("replication store status",
-		zap.Uint64s("up-primary", storeIDs[primaryUp]),
-		zap.Uint64s("up-dr", storeIDs[drUp]),
-		zap.Uint64s("down-primary", storeIDs[primaryDown]),
-		zap.Uint64s("down-dr", storeIDs[drDown]),
-		zap.Bool("can-sync", canSync),
-		zap.Bool("has-majority", hasMajority),
-	)
-
 	/*
 
 	           +----+      all region sync     +------------+
@@ -469,35 +467,36 @@ func (m *ModeManager) tickUpdateState() {
 
 	*/
 
-	switch m.drGetState() {
+	state := m.drGetState()
+	switch state {
 	case drStateSync:
 		// If hasMajority is false, the cluster is always unavailable. Switch to async won't help.
 		if !canSync && hasMajority {
-			m.drSwitchToAsyncWait(storeIDs[primaryUp])
+			_ = m.drSwitchToAsyncWait(storeIDs[primaryUp])
 		}
 	case drStateAsyncWait:
 		if canSync {
-			m.drSwitchToSync()
+			_ = m.drSwitchToSync()
 			break
 		}
 		if oldAvailableStores := m.drGetAvailableStores(); !reflect.DeepEqual(oldAvailableStores, storeIDs[primaryUp]) {
-			m.drSwitchToAsyncWait(storeIDs[primaryUp])
+			_ = m.drSwitchToAsyncWait(storeIDs[primaryUp])
 			break
 		}
 		if m.drCheckStoreStateUpdated(storeIDs[primaryUp]) {
-			m.drSwitchToAsync(storeIDs[primaryUp])
+			_ = m.drSwitchToAsync(storeIDs[primaryUp])
 		}
 	case drStateAsync:
 		if canSync && m.drDurationSinceAsyncStart() > m.config.DRAutoSync.WaitRecoverTimeout.Duration {
-			m.drSwitchToSyncRecover()
+			_ = m.drSwitchToSyncRecover()
 			break
 		}
 		if !reflect.DeepEqual(m.drGetAvailableStores(), storeIDs[primaryUp]) && m.drCheckStoreStateUpdated(storeIDs[primaryUp]) {
-			m.drSwitchToAsync(storeIDs[primaryUp])
+			_ = m.drSwitchToAsync(storeIDs[primaryUp])
 		}
 	case drStateSyncRecover:
 		if !canSync && hasMajority {
-			m.drSwitchToAsync(storeIDs[primaryUp])
+			_ = m.drSwitchToAsync(storeIDs[primaryUp])
 		} else {
 			m.updateProgress()
 			progress := m.estimateProgress()
@@ -505,12 +504,25 @@ func (m *ModeManager) tickUpdateState() {
 			drRecoverProgressGauge.Set(float64(progress))
 
 			if progress == 1.0 {
-				m.drSwitchToSync()
+				_ = m.drSwitchToSync()
 			} else {
 				m.updateRecoverProgress(progress)
 			}
 		}
 	}
+
+	logFunc := log.Debug
+	if state != m.drGetState() {
+		logFunc = log.Info
+	}
+	logFunc("replication store status",
+		zap.Uint64s("up-primary", storeIDs[primaryUp]),
+		zap.Uint64s("up-dr", storeIDs[drUp]),
+		zap.Uint64s("down-primary", storeIDs[primaryDown]),
+		zap.Uint64s("down-dr", storeIDs[drDown]),
+		zap.Bool("can-sync", canSync),
+		zap.Bool("has-majority", hasMajority),
+	)
 }
 
 func (m *ModeManager) tickReplicateStatus() {

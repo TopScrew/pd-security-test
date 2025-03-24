@@ -21,9 +21,11 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"github.com/stretchr/testify/require"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/stretchr/testify/require"
+
 	"github.com/tikv/pd/pkg/utils/typeutil"
 )
 
@@ -62,7 +64,7 @@ func TestDistinctScore(t *testing.T) {
 	re.Equal(float64(0), DistinctScore(labels, stores, store))
 }
 
-func TestCloneStore(t *testing.T) {
+func TestCloneStore(_ *testing.T) {
 	meta := &metapb.Store{Id: 1, Address: "mock://tikv-1", Labels: []*metapb.StoreLabel{{Key: "zone", Value: "z1"}, {Key: "host", Value: "h1"}}}
 	store := NewStoreInfo(meta)
 	start := time.Now()
@@ -107,7 +109,7 @@ func BenchmarkStoreClone(b *testing.B) {
 		Labels:  []*metapb.StoreLabel{{Key: "zone", Value: "z1"}, {Key: "host", Value: "h1"}}}
 	store := NewStoreInfo(meta)
 	b.ResetTimer()
-	for t := 0; t < b.N; t++ {
+	for t := range b.N {
 		store.Clone(SetLeaderCount(t))
 	}
 }

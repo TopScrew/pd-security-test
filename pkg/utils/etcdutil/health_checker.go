@@ -21,13 +21,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/prometheus/client_golang/prometheus"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
-	"go.etcd.io/etcd/clientv3"
-	"go.uber.org/zap"
 )
 
 const pickedCountThreshold = 3
@@ -146,7 +148,7 @@ func (checker *healthChecker) inspector(ctx context.Context) {
 }
 
 func (checker *healthChecker) close() {
-	checker.healthyClients.Range(func(key, value any) bool {
+	checker.healthyClients.Range(func(_, value any) bool {
 		healthyCli := value.(*healthyClient)
 		healthyCli.healthState.Set(0)
 		healthyCli.Client.Close()
@@ -166,7 +168,7 @@ type healthProbe struct {
 }
 
 // See https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L105-L145
-func (checker *healthChecker) patrol(ctx context.Context) ([]string, []string, bool) {
+func (checker *healthChecker) patrol(ctx context.Context) (lastEps, pickedEps []string, changed bool) {
 	var (
 		count   = checker.clientCount()
 		probeCh = make(chan healthProbe, count)
@@ -207,10 +209,8 @@ func (checker *healthChecker) patrol(ctx context.Context) ([]string, []string, b
 	})
 	wg.Wait()
 	close(probeCh)
-	var (
-		lastEps   = checker.client.Endpoints()
-		pickedEps = checker.pickEps(probeCh)
-	)
+	lastEps = checker.client.Endpoints()
+	pickedEps = checker.pickEps(probeCh)
 	if len(pickedEps) > 0 {
 		checker.updateEvictedEps(lastEps, pickedEps)
 		pickedEps = checker.filterEps(pickedEps)
@@ -247,7 +247,7 @@ func (checker *healthChecker) pickEps(probeCh <-chan healthProbe) []string {
 	//  - [9s, 10s)
 	// Then the picked endpoints will be {A, B} and if C is in the last used endpoints, it will be evicted later.
 	factor := int(DefaultRequestTimeout / DefaultSlowRequestTime)
-	for i := 0; i < factor; i++ {
+	for i := range factor {
 		minLatency, maxLatency := DefaultSlowRequestTime*time.Duration(i), DefaultSlowRequestTime*time.Duration(i+1)
 		for _, probe := range probes {
 			if minLatency <= probe.took && probe.took < maxLatency {
@@ -385,7 +385,7 @@ func (checker *healthChecker) update() {
 		}
 	}
 	// Clean up the stale clients which are not in the etcd cluster anymore.
-	checker.healthyClients.Range(func(key, value any) bool {
+	checker.healthyClients.Range(func(key, _ any) bool {
 		ep := key.(string)
 		if _, ok := epMap[ep]; !ok {
 			log.Info("remove stale etcd client",

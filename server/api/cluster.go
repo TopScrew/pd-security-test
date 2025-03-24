@@ -17,8 +17,9 @@ package api
 import (
 	"net/http"
 
-	"github.com/tikv/pd/server"
 	"github.com/unrolled/render"
+
+	"github.com/tikv/pd/server"
 )
 
 type clusterHandler struct {
@@ -38,7 +39,7 @@ func newClusterHandler(svr *server.Server, rd *render.Render) *clusterHandler {
 // @Produce  json
 // @Success  200  {object}  metapb.Cluster
 // @Router   /cluster [get]
-func (h *clusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
+func (h *clusterHandler) GetCluster(w http.ResponseWriter, _ *http.Request) {
 	h.rd.JSON(w, http.StatusOK, h.svr.GetCluster())
 }
 
@@ -48,7 +49,7 @@ func (h *clusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
 // @Success  200  {object}  cluster.Status
 // @Failure  500  {string}  string  "PD server failed to proceed the request."
 // @Router   /cluster/status [get]
-func (h *clusterHandler) GetClusterStatus(w http.ResponseWriter, r *http.Request) {
+func (h *clusterHandler) GetClusterStatus(w http.ResponseWriter, _ *http.Request) {
 	status, err := h.svr.GetClusterStatus()
 	if err != nil {
 		h.rd.JSON(w, http.StatusInternalServerError, err.Error())

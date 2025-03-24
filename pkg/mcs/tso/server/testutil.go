@@ -17,11 +17,12 @@ package server
 import (
 	"strings"
 
-	"github.com/pingcap/kvproto/pkg/tsopb"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/pingcap/kvproto/pkg/tsopb"
 )
 
 // MustNewGrpcClient must create a new TSO grpc client.
@@ -34,12 +35,14 @@ func MustNewGrpcClient(re *require.Assertions, addr string) (*grpc.ClientConn, t
 // GenerateConfig generates a new config with the given options.
 func GenerateConfig(c *Config) (*Config, error) {
 	arguments := []string{
+		"--name=" + c.Name,
 		"--listen-addr=" + c.ListenAddr,
 		"--advertise-listen-addr=" + c.AdvertiseListenAddr,
 		"--backend-endpoints=" + c.BackendEndpoints,
 	}
 
 	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	flagSet.StringP("name", "", "", "human-readable name for this tso member")
 	flagSet.BoolP("version", "V", false, "print version information and exit")
 	flagSet.StringP("config", "", "", "config file")
 	flagSet.StringP("backend-endpoints", "", "", "url for etcd client")

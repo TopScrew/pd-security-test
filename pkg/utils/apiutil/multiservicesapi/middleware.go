@@ -19,11 +19,13 @@ import (
 	"net/url"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/log"
+
 	bs "github.com/tikv/pd/pkg/basicserver"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/utils/apiutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -48,8 +50,8 @@ func ServiceRedirector() gin.HandlerFunc {
 
 		// Prevent more than one redirection.
 		if name := c.Request.Header.Get(ServiceRedirectorHeader); len(name) != 0 {
-			log.Error("redirect but server is not primary", zap.String("from", name), zap.String("server", svr.Name()), errs.ZapError(errs.ErrRedirect))
-			c.AbortWithStatusJSON(http.StatusInternalServerError, errs.ErrRedirect.FastGenByArgs().Error())
+			log.Error("redirect but server is not primary", zap.String("from", name), zap.String("server", svr.Name()), errs.ZapError(errs.ErrRedirectToNotPrimary))
+			c.AbortWithStatusJSON(http.StatusInternalServerError, errs.ErrRedirectToNotPrimary.FastGenByArgs().Error())
 			return
 		}
 

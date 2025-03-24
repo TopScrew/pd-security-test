@@ -19,10 +19,21 @@ import (
 	"strings"
 
 	"github.com/coreos/go-semver/semver"
-	"github.com/pingcap/log"
-	"github.com/tikv/pd/pkg/errs"
 	"go.uber.org/zap"
+
+	"github.com/pingcap/log"
+
+	"github.com/tikv/pd/pkg/errs"
 )
+
+// Status is the status of PD server.
+// NOTE: This type is exported by HTTP API. Please pay more attention when modifying it.
+type Status struct {
+	BuildTS        string `json:"build_ts"`
+	Version        string `json:"version"`
+	GitHash        string `json:"git_hash"`
+	StartTimestamp int64  `json:"start_timestamp"`
+}
 
 const (
 	// CommunityEdition is the default edition for building.

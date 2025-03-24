@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pingcap/log"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/pingcap/log"
+
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"
 )
@@ -52,10 +54,11 @@ func (suite *logTestSuite) TearDownSuite() {
 }
 
 func (suite *logTestSuite) TestSetLogLevel() {
+	re := suite.Require()
 	level := "error"
 	data, err := json.Marshal(level)
-	suite.NoError(err)
-	err = tu.CheckPostJSON(testDialClient, suite.urlPrefix+"/log", data, tu.StatusOK(suite.Require()))
-	suite.NoError(err)
-	suite.Equal(level, log.GetLevel().String())
+	re.NoError(err)
+	err = tu.CheckPostJSON(testDialClient, suite.urlPrefix+"/log", data, tu.StatusOK(re))
+	re.NoError(err)
+	re.Equal(level, log.GetLevel().String())
 }

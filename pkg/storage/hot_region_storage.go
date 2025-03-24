@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	   http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,12 +24,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/encryptionpb"
-	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/log"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/util"
+	"go.uber.org/zap"
+
+	"github.com/pingcap/kvproto/pkg/encryptionpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
+
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
@@ -37,7 +40,6 @@ import (
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
-	"go.uber.org/zap"
 )
 
 // HotRegionStorage is used to store the hot region info.
@@ -171,7 +173,9 @@ func (h *HotRegionStorage) backgroundDelete() {
 				 there may be residual hot regions, you can remove it manually, [pd-dir]/data/hot-region.`)
 				continue
 			}
-			h.delete(int(curReservedDays))
+			if err := h.delete(int(curReservedDays)); err != nil {
+				log.Error("delete hot region meet error", errs.ZapError(err))
+			}
 		case <-h.hotRegionInfoCtx.Done():
 			return
 		}
@@ -264,8 +268,8 @@ func (h *HotRegionStorage) packHistoryHotRegions(historyHotRegions []HistoryHotR
 		if err != nil {
 			return err
 		}
-		historyHotRegions[i].StartKey = core.String(region.StartKey)
-		historyHotRegions[i].EndKey = core.String(region.EndKey)
+		historyHotRegions[i].StartKey = string(region.StartKey)
+		historyHotRegions[i].EndKey = string(region.EndKey)
 		key := HotRegionStorePath(hotRegionType, historyHotRegions[i].UpdateTime, historyHotRegions[i].RegionID)
 		h.batchHotInfo[key] = &historyHotRegions[i]
 	}
@@ -383,8 +387,8 @@ func (it *HotRegionStorageIterator) Next() (*HistoryHotRegion, error) {
 	if err := encryption.DecryptRegion(region, it.encryptionKeyManager); err != nil {
 		return nil, err
 	}
-	message.StartKey = core.String(region.StartKey)
-	message.EndKey = core.String(region.EndKey)
+	message.StartKey = string(region.StartKey)
+	message.EndKey = string(region.EndKey)
 	message.EncryptionMeta = nil
 	return &message, nil
 }

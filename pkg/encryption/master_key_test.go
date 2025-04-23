@@ -20,9 +20,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/encryptionpb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPlaintextMasterKey(t *testing.T) {

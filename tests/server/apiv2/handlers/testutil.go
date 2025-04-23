@@ -21,10 +21,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/apiv2/handlers"
@@ -32,7 +30,6 @@ import (
 )
 
 const (
-	v2Prefix             = "/pd/api/v2"
 	keyspacesPrefix      = "/pd/api/v2/keyspaces"
 	keyspaceGroupsPrefix = "/pd/api/v2/tso/keyspace-groups"
 )

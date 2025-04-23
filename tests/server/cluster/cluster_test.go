@@ -27,19 +27,14 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/docker/go-units"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/replication_modepb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/dashboard"
-	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/id"
 	"github.com/tikv/pd/pkg/mock/mockid"
 	"github.com/tikv/pd/pkg/mock/mockserver"
@@ -60,6 +55,8 @@ import (
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/tests"
 	"github.com/tikv/pd/tests/server/api"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -402,15 +399,15 @@ func testPutStore(re *require.Assertions, clusterID uint64, rc *cluster.RaftClus
 	re.NoError(err)
 	re.Equal(pdpb.ErrorType_OK, resp.GetHeader().GetError().GetType())
 
-	rc.AllocID(1)
-	id, _, err := rc.AllocID(1)
+	rc.AllocID()
+	id, err := rc.AllocID()
 	re.NoError(err)
 	// Put new store with a duplicated address when old store is up will fail.
 	resp, err = putStore(grpcPDClient, clusterID, newMetaStore(id, store.GetAddress(), "2.1.0", metapb.StoreState_Up, getTestDeployPath(id)))
 	re.NoError(err)
 	re.Equal(pdpb.ErrorType_UNKNOWN, resp.GetHeader().GetError().GetType())
 
-	id, _, err = rc.AllocID(1)
+	id, err = rc.AllocID()
 	re.NoError(err)
 	// Put new store with a duplicated address when old store is offline will fail.
 	resetStoreState(re, rc, store.GetId(), metapb.StoreState_Offline)
@@ -418,7 +415,7 @@ func testPutStore(re *require.Assertions, clusterID uint64, rc *cluster.RaftClus
 	re.NoError(err)
 	re.Equal(pdpb.ErrorType_UNKNOWN, resp.GetHeader().GetError().GetType())
 
-	id, _, err = rc.AllocID(1)
+	id, err = rc.AllocID()
 	re.NoError(err)
 	// Put new store with a duplicated address when old store is tombstone is OK.
 	resetStoreState(re, rc, store.GetId(), metapb.StoreState_Tombstone)
@@ -427,7 +424,7 @@ func testPutStore(re *require.Assertions, clusterID uint64, rc *cluster.RaftClus
 	re.NoError(err)
 	re.Equal(pdpb.ErrorType_OK, resp.GetHeader().GetError().GetType())
 
-	id, _, err = rc.AllocID(1)
+	id, err = rc.AllocID()
 	re.NoError(err)
 	deployPath := getTestDeployPath(id)
 	// Put a new store.
@@ -594,9 +591,7 @@ func TestRaftClusterMultipleRestart(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tc, err := tests.NewTestCluster(ctx, 1, func(conf *config.Config, _ string) {
-		conf.LeaderLease = 300
-	})
+	tc, err := tests.NewTestCluster(ctx, 1)
 	defer tc.Destroy()
 	re.NoError(err)
 
@@ -609,7 +604,7 @@ func TestRaftClusterMultipleRestart(t *testing.T) {
 	clusterID := leaderServer.GetClusterID()
 	bootstrapCluster(re, clusterID, grpcPDClient)
 	// add an offline store
-	storeID, _, err := leaderServer.GetAllocator().Alloc(1)
+	storeID, err := leaderServer.GetAllocator().Alloc()
 	re.NoError(err)
 	store := newMetaStore(storeID, "127.0.0.1:4", "2.1.0", metapb.StoreState_Offline, getTestDeployPath(storeID))
 	rc := leaderServer.GetRaftCluster()
@@ -640,11 +635,9 @@ func TestRaftClusterStartTSOJob(t *testing.T) {
 	name := "pd1"
 	// case 1: normal start
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	tc, err := tests.NewTestCluster(ctx, 1, func(conf *config.Config, _ string) {
 		conf.LeaderLease = 300
 	})
-	defer tc.Destroy()
 	re.NoError(err)
 	re.NoError(tc.RunInitialServers())
 	re.NotEmpty(tc.WaitLeader())
@@ -770,7 +763,7 @@ func TestNotLeader(t *testing.T) {
 	grpcStatus, ok := status.FromError(err)
 	re.True(ok)
 	re.Equal(codes.Unavailable, grpcStatus.Code())
-	re.ErrorContains(errs.ErrNotLeader, grpcStatus.Message())
+	re.ErrorContains(server.ErrNotLeader, grpcStatus.Message())
 }
 
 func TestStoreVersionChange(t *testing.T) {
@@ -791,7 +784,7 @@ func TestStoreVersionChange(t *testing.T) {
 	bootstrapCluster(re, clusterID, grpcPDClient)
 	svr := leaderServer.GetServer()
 	svr.SetClusterVersion("2.0.0")
-	storeID, _, err := leaderServer.GetAllocator().Alloc(1)
+	storeID, err := leaderServer.GetAllocator().Alloc()
 	re.NoError(err)
 	store := newMetaStore(storeID, "127.0.0.1:4", "2.1.0", metapb.StoreState_Up, getTestDeployPath(storeID))
 	var wg sync.WaitGroup
@@ -833,7 +826,7 @@ func TestConcurrentHandleRegion(t *testing.T) {
 	stores := make([]*metapb.Store, 0, len(storeAddrs))
 	id := leaderServer.GetAllocator()
 	for _, addr := range storeAddrs {
-		storeID, _, err := id.Alloc(1)
+		storeID, err := id.Alloc()
 		re.NoError(err)
 		store := newMetaStore(storeID, addr, "2.1.0", metapb.StoreState_Up, getTestDeployPath(storeID))
 		stores = append(stores, store)
@@ -859,7 +852,7 @@ func TestConcurrentHandleRegion(t *testing.T) {
 		re.Equal(pdpb.ErrorType_OK, resp.GetHeader().GetError().GetType())
 		stream, err := grpcPDClient.RegionHeartbeat(ctx)
 		re.NoError(err)
-		peerID, _, err := id.Alloc(1)
+		peerID, err := id.Alloc()
 		re.NoError(err)
 		peer := &metapb.Peer{Id: peerID, StoreId: store.GetId()}
 		regionReq := &pdpb.RegionHeartbeatRequest{
@@ -896,9 +889,9 @@ func TestConcurrentHandleRegion(t *testing.T) {
 
 	concurrent := 1000
 	for i := range concurrent {
-		peerID, _, err := id.Alloc(1)
+		peerID, err := id.Alloc()
 		re.NoError(err)
-		regionID, _, err := id.Alloc(1)
+		regionID, err := id.Alloc()
 		re.NoError(err)
 		region := &metapb.Region{
 			Id:       regionID,
@@ -1261,7 +1254,7 @@ func TestOfflineStoreLimit(t *testing.T) {
 	re.NotNil(rc)
 	id := leaderServer.GetAllocator()
 	for _, addr := range storeAddrs {
-		storeID, _, err := id.Alloc(1)
+		storeID, err := id.Alloc()
 		re.NoError(err)
 		store := newMetaStore(storeID, addr, "4.0.0", metapb.StoreState_Up, getTestDeployPath(storeID))
 		resp, err := putStore(grpcPDClient, clusterID, store)
@@ -1412,9 +1405,9 @@ func TestStaleTermHeartbeat(t *testing.T) {
 	peers := make([]*metapb.Peer, 0, len(storeAddrs))
 	id := leaderServer.GetAllocator()
 	for _, addr := range storeAddrs {
-		storeID, _, err := id.Alloc(1)
+		storeID, err := id.Alloc()
 		re.NoError(err)
-		peerID, _, err := id.Alloc(1)
+		peerID, err := id.Alloc()
 		re.NoError(err)
 		store := newMetaStore(storeID, addr, "3.0.0", metapb.StoreState_Up, getTestDeployPath(storeID))
 		resp, err := putStore(grpcPDClient, clusterID, store)
@@ -1595,9 +1588,9 @@ func checkEvictLeaderStoreIDs(re *require.Assertions, sc *schedulers.Controller,
 
 func putRegionWithLeader(re *require.Assertions, rc *cluster.RaftCluster, id id.Allocator, storeID uint64) {
 	for i := range 3 {
-		regionID, _, err := id.Alloc(1)
+		regionID, err := id.Alloc()
 		re.NoError(err)
-		peerID, _, err := id.Alloc(1)
+		peerID, err := id.Alloc()
 		re.NoError(err)
 		region := &metapb.Region{
 			Id:       regionID,
@@ -1661,7 +1654,7 @@ func TestMinResolvedTS(t *testing.T) {
 	re.NotNil(rc)
 	svr := leaderServer.GetServer()
 	addStoreAndCheckMinResolvedTS := func(re *require.Assertions, isTiflash bool, minResolvedTS, expect uint64) uint64 {
-		storeID, _, err := id.Alloc(1)
+		storeID, err := id.Alloc()
 		re.NoError(err)
 		store := &metapb.Store{
 			Id:      storeID,
@@ -1950,8 +1943,8 @@ func TestPatrolRegionConfigChange(t *testing.T) {
 		tests.MustPutStore(re, tc, store)
 	}
 	for i := 1; i <= 200; i++ {
-		startKey := []byte(strconv.Itoa(i*2 - 1))
-		endKey := []byte(strconv.Itoa(i * 2))
+		startKey := []byte(fmt.Sprintf("%d", i*2-1))
+		endKey := []byte(fmt.Sprintf("%d", i*2))
 		tests.MustPutRegion(re, tc, uint64(i), uint64(i%3+1), startKey, endKey)
 	}
 	fname := testutil.InitTempFileLogger("debug")

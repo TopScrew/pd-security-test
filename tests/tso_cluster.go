@@ -20,10 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/errors"
-
+	"github.com/stretchr/testify/require"
 	tso "github.com/tikv/pd/pkg/mcs/tso/server"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/storage/endpoint"

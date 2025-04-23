@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
 	"github.com/tikv/pd/server/apiv2/handlers"
 )
 
@@ -101,7 +100,7 @@ func showKeyspaceNameCommandFunc(cmd *cobra.Command, args []string) {
 	}
 	resp, err := doRequest(cmd, url, http.MethodGet, http.Header{})
 	// Retry without the force_refresh_group_id if the keyspace group manager is not initialized.
-	// This can happen when PD is not running in microservice env.
+	// This can happen when PD is not running in API mode.
 	if err != nil && refreshGroupID && strings.Contains(err.Error(), handlers.GroupManagerUninitializedErr) {
 		resp, err = doRequest(cmd, fmt.Sprintf("%s/%s", keyspacePrefix, args[0]), http.MethodGet, http.Header{})
 	}

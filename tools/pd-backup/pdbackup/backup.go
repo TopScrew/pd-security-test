@@ -25,13 +25,11 @@ import (
 	"path"
 	"strconv"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
-
-	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/server/config"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -77,7 +75,7 @@ func GetBackupInfo(client *clientv3.Client, pdAddr string) (*BackupInfo, error) 
 
 	backInfo.AllocIDMax = allocIDMax
 
-	resp, err = etcdutil.EtcdKVGet(client, keypath.TimestampPath(constant.DefaultKeyspaceGroupID))
+	resp, err = etcdutil.EtcdKVGet(client, keypath.TimestampPath(rootPath))
 	if err != nil {
 		return nil, err
 	}

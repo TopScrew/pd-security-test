@@ -22,15 +22,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	promClient "github.com/prometheus/client_golang/api"
 	promAPI "github.com/prometheus/client_golang/api/prometheus/v1"
 	promModel "github.com/prometheus/common/model"
-	"go.uber.org/zap"
-
-	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/errs"
+	"go.uber.org/zap"
 )
 
 const (

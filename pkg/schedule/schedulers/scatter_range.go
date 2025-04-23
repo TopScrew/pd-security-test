@@ -19,10 +19,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-
 	"github.com/pingcap/errors"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
@@ -31,6 +28,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/types"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"github.com/unrolled/render"
 )
 
 type scatterRangeSchedulerConfig struct {

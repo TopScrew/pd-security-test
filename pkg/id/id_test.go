@@ -16,16 +16,19 @@ package id
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 )
 
 const (
-	leaderPath = "/pd/0/leader"
+	rootPath   = "/pd"
+	leaderPath = "/pd/leader"
+	allocPath  = "alloc_id"
+	label      = "idalloc"
 	memberVal  = "member"
 	step       = uint64(500)
 )
@@ -41,34 +44,33 @@ func TestMultipleAllocator(t *testing.T) {
 	_, err := client.Put(context.Background(), leaderPath, memberVal)
 	re.NoError(err)
 
-	var i uint64
 	wg := sync.WaitGroup{}
-	fn := func(label label) {
+	for i := range 3 {
+		iStr := strconv.Itoa(i)
 		wg.Add(1)
-		// Different allocators have different labels and steps.
+		// All allocators share rootPath and memberVal, but they have different allocPaths, labels and steps.
 		allocator := NewAllocator(&AllocatorParams{
-			Client: client,
-			Label:  label,
-			Member: memberVal,
-			Step:   step * i, // allocator 0, 1 should have step size 1000 (default), 500 respectively.
+			Client:    client,
+			RootPath:  rootPath,
+			AllocPath: allocPath + iStr,
+			Label:     label + iStr,
+			Member:    memberVal,
+			Step:      step * uint64(i), // allocator 0, 1, 2 should have step size 1000 (default), 500, 1000 respectively.
 		})
 		go func(re *require.Assertions, allocator Allocator) {
 			defer wg.Done()
 			testAllocator(re, allocator)
 		}(re, allocator)
-		i++
 	}
-	fn(DefaultLabel)
-	fn(KeyspaceLabel)
 	wg.Wait()
 }
 
 // testAllocator sequentially updates given allocator and check if values are expected.
 func testAllocator(re *require.Assertions, allocator Allocator) {
-	startID, _, err := allocator.Alloc(1)
+	startID, err := allocator.Alloc()
 	re.NoError(err)
 	for i := startID + 1; i < startID+step*20; i++ {
-		id, _, err := allocator.Alloc(1)
+		id, err := allocator.Alloc()
 		re.NoError(err)
 		re.Equal(i, id)
 	}

@@ -19,9 +19,9 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/errors"
-
-	"github.com/tikv/pd/pkg/errs"
 )
+
+var errNoCPUControllerDetected = errors.New("no cpu controller detected")
 
 // Helper function for getCgroupCPU. Root is always "/", except in tests.
 func getCgroupCPUHelper(root string) (CPUUsage, error) {
@@ -32,7 +32,7 @@ func getCgroupCPUHelper(root string) (CPUUsage, error) {
 
 	// No CPU controller detected
 	if path == "" {
-		return CPUUsage{}, errs.ErrNoCPUControllerDetected
+		return CPUUsage{}, errNoCPUControllerDetected
 	}
 
 	mount, ver, err := getCgroupDetails(filepath.Join(root, procPathMountInfo), path, "cpu,cpuacct")

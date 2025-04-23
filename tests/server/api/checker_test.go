@@ -22,7 +22,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/tests"
 )
@@ -45,7 +44,7 @@ func (suite *checkerTestSuite) TearDownSuite() {
 }
 
 func (suite *checkerTestSuite) TestAPI() {
-	suite.env.RunTest(suite.checkAPI)
+	suite.env.RunTestBasedOnMode(suite.checkAPI)
 }
 
 func (suite *checkerTestSuite) checkAPI(cluster *tests.TestCluster) {

@@ -22,8 +22,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/encryptionpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
-	pd "github.com/tikv/pd/client/clients/router"
+	pd "github.com/tikv/pd/client"
 )
 
 // ServiceSafePoint is the safepoint for a specific service
@@ -460,7 +459,7 @@ type RuleOp struct {
 	DeleteByIDPrefix bool       `json:"delete_by_id_prefix"` // if action == delete, delete by the prefix of id
 }
 
-func (r *RuleOp) String() string {
+func (r RuleOp) String() string {
 	b, _ := json.Marshal(r)
 	return string(b)
 }
@@ -605,8 +604,8 @@ type MembersInfo struct {
 	EtcdLeader *pdpb.Member         `json:"etcd_leader,omitempty"`
 }
 
-// MicroserviceMember is the member info of a microservice.
-type MicroserviceMember struct {
+// MicroServiceMember is the member info of a micro service.
+type MicroServiceMember struct {
 	ServiceAddr    string `json:"service-addr"`
 	Version        string `json:"version"`
 	GitHash        string `json:"git-hash"`

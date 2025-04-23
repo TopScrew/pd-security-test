@@ -17,11 +17,8 @@ package filter
 import (
 	"strconv"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -30,6 +27,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/plan"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	"go.uber.org/zap"
 )
 
 // SelectSourceStores selects stores that be selected as source store from the list.
@@ -392,17 +390,8 @@ func (f *StoreStateFilter) isRemoving(_ config.SharedConfigProvider, store *core
 	return statusOK
 }
 
-func (f *StoreStateFilter) pauseLeaderTransferIn(_ config.SharedConfigProvider, store *core.StoreInfo) *plan.Status {
-	if !store.AllowLeaderTransferIn() {
-		f.Reason = storeStatePauseLeader
-		return statusStoreRejectLeader
-	}
-	f.Reason = storeStateOK
-	return statusOK
-}
-
-func (f *StoreStateFilter) pauseLeaderTransferOut(_ config.SharedConfigProvider, store *core.StoreInfo) *plan.Status {
-	if !store.AllowLeaderTransferOut() {
+func (f *StoreStateFilter) pauseLeaderTransfer(_ config.SharedConfigProvider, store *core.StoreInfo) *plan.Status {
+	if !store.AllowLeaderTransfer() {
 		f.Reason = storeStatePauseLeader
 		return statusStoreRejectLeader
 	}
@@ -522,13 +511,13 @@ func (f *StoreStateFilter) anyConditionMatch(typ int, conf config.SharedConfigPr
 	var funcs []conditionFunc
 	switch typ {
 	case leaderSource:
-		funcs = []conditionFunc{f.isRemoved, f.isDown, f.pauseLeaderTransferOut, f.isDisconnected}
+		funcs = []conditionFunc{f.isRemoved, f.isDown, f.pauseLeaderTransfer, f.isDisconnected}
 	case regionSource:
 		funcs = []conditionFunc{f.isBusy, f.exceedRemoveLimit, f.tooManySnapshots}
 	case witnessSource:
 		funcs = []conditionFunc{f.isBusy}
 	case leaderTarget:
-		funcs = []conditionFunc{f.isRemoved, f.isRemoving, f.isDown, f.pauseLeaderTransferIn,
+		funcs = []conditionFunc{f.isRemoved, f.isRemoving, f.isDown, f.pauseLeaderTransfer,
 			f.slowStoreEvicted, f.slowTrendEvicted, f.isDisconnected, f.isBusy, f.hasRejectLeaderProperty}
 	case regionTarget:
 		funcs = []conditionFunc{f.isRemoved, f.isRemoving, f.isDown, f.isDisconnected, f.isBusy,
@@ -932,8 +921,6 @@ var (
 	allSpecialEngines = []string{core.EngineTiFlash}
 	// NotSpecialEngines is used to filter the special engine.
 	NotSpecialEngines = placement.LabelConstraint{Key: core.EngineKey, Op: placement.NotIn, Values: allSpecialEngines}
-	// SpecialEngines is used to filter the TiFlash engine.
-	SpecialEngines = placement.LabelConstraint{Key: core.EngineKey, Op: placement.In, Values: allSpecialEngines}
 )
 
 type isolationFilter struct {

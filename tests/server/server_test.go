@@ -21,17 +21,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/tempurl"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/config"
 	"github.com/tikv/pd/tests"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
@@ -67,7 +65,7 @@ func TestUpdateAdvertiseUrls(t *testing.T) {
 	for _, conf := range cluster.GetConfig().InitialServers {
 		serverConf, err := conf.Generate()
 		re.NoError(err)
-		s, err := tests.NewTestServer(ctx, serverConf, nil)
+		s, err := tests.NewTestServer(ctx, serverConf)
 		re.NoError(err)
 		cluster.GetServers()[conf.Name] = s
 	}
@@ -172,12 +170,11 @@ func TestGRPCRateLimit(t *testing.T) {
 			Header:    &pdpb.RequestHeader{ClusterId: leaderServer.GetClusterID()},
 			RegionKey: []byte(""),
 		})
-		re.Empty(resp.GetHeader().GetError())
+		re.NoError(err)
 		if i == 0 {
-			re.NoError(err)
+			re.Empty(resp.GetHeader().GetError())
 		} else {
-			re.Error(err)
-			re.Contains(err.Error(), "rate limit exceeded")
+			re.Contains(resp.GetHeader().GetError().GetMessage(), "rate limit exceeded")
 		}
 	}
 
@@ -217,9 +214,9 @@ func TestGRPCRateLimit(t *testing.T) {
 			Header:    &pdpb.RequestHeader{ClusterId: leaderServer.GetClusterID()},
 			RegionKey: []byte(""),
 		})
-		re.Empty(resp.GetHeader().GetError())
-		if err != nil {
-			errCh <- err.Error()
+		re.NoError(err)
+		if resp.GetHeader().GetError() != nil {
+			errCh <- resp.GetHeader().GetError().GetMessage()
 		} else {
 			okCh <- struct{}{}
 		}
@@ -232,9 +229,9 @@ func TestGRPCRateLimit(t *testing.T) {
 			Header:    &pdpb.RequestHeader{ClusterId: leaderServer.GetClusterID()},
 			RegionKey: []byte(""),
 		})
-		re.Empty(resp.GetHeader().GetError())
-		if err != nil {
-			errCh <- err.Error()
+		re.NoError(err)
+		if resp.GetHeader().GetError() != nil {
+			errCh <- resp.GetHeader().GetError().GetMessage()
 		} else {
 			okCh <- struct{}{}
 		}

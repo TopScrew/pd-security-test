@@ -23,11 +23,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/utils/tempurl"
+	"go.uber.org/zap"
 )
 
 var statusAddress = flag.String("status-addr", "0.0.0.0:0", "status address")

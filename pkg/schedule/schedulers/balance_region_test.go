@@ -18,10 +18,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/mock/mockcluster"
@@ -565,7 +563,7 @@ func checkBalanceRegionOpInfluence(re *require.Assertions, enablePlacementRules 
 	// ensure store score without operator influence : store 4 > store 3
 	// and store score with operator influence : store 3 > store 4
 	for i := 1; i <= 8; i++ {
-		id, _, _ := tc.Alloc(1)
+		id, _ := tc.Alloc()
 		origin := tc.AddLeaderRegion(id, 4)
 		newPeer := &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter}
 		op, _ := operator.CreateMovePeerOperator("balance-region", tc, origin, operator.OpKind(0), 4, newPeer)

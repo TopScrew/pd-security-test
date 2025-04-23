@@ -17,10 +17,8 @@ package simutil
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
 )
@@ -50,7 +48,7 @@ func TestGenerateTiDBEncodedSplitKey(t *testing.T) {
 	re := require.New(t)
 	s := []byte(codec.EncodeBytes([]byte("a")))
 	e := []byte(codec.EncodeBytes([]byte("ab")))
-	for range 1001 {
+	for i := 0; i <= 1000; i++ {
 		cc, err := GenerateTiDBEncodedSplitKey(s, e)
 		re.NoError(err)
 		re.Less(string(s), string(cc))
@@ -84,7 +82,7 @@ func TestGenerateTiDBEncodedSplitKey(t *testing.T) {
 	// split equal key
 	s = codec.EncodeBytes([]byte{116, 128, 0, 0, 0, 0, 0, 0, 1})
 	e = codec.EncodeBytes([]byte{116, 128, 0, 0, 0, 0, 0, 0, 1, 1})
-	for range 1001 {
+	for i := 0; i <= 1000; i++ {
 		re.Less(string(s), string(e))
 		splitKey, err = GenerateTiDBEncodedSplitKey(s, e)
 		re.NoError(err)

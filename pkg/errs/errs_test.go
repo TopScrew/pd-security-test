@@ -20,11 +20,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // testingWriter is a WriteSyncer that writes to the the messages.

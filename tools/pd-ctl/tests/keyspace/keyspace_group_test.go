@@ -22,10 +22,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/failpoint"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/testutil"
@@ -41,7 +39,7 @@ func TestKeyspaceGroup(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 1)
+	tc, err := pdTests.NewTestAPICluster(ctx, 1)
 	re.NoError(err)
 	defer tc.Destroy()
 	err = tc.RunInitialServers()
@@ -53,7 +51,7 @@ func TestKeyspaceGroup(t *testing.T) {
 	cmd := ctl.GetRootCmd()
 
 	// Show keyspace group information.
-	defaultKeyspaceGroupID := strconv.FormatUint(uint64(constant.DefaultKeyspaceGroupID), 10)
+	defaultKeyspaceGroupID := fmt.Sprintf("%d", constant.DefaultKeyspaceGroupID)
 	args := []string{"-u", pdAddr, "keyspace-group"}
 	output, err := tests.ExecuteCommand(cmd, append(args, defaultKeyspaceGroupID)...)
 	re.NoError(err)
@@ -102,7 +100,7 @@ func TestSplitKeyspaceGroup(t *testing.T) {
 	for i := range 129 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 3, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 3, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -157,7 +155,7 @@ func TestExternalAllocNodeWhenStart(t *testing.T) {
 	for i := range 10 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 1, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 1, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -173,7 +171,7 @@ func TestExternalAllocNodeWhenStart(t *testing.T) {
 	re.NoError(leaderServer.BootstrapCluster())
 
 	// check keyspace group information.
-	defaultKeyspaceGroupID := strconv.FormatUint(uint64(constant.DefaultKeyspaceGroupID), 10)
+	defaultKeyspaceGroupID := fmt.Sprintf("%d", constant.DefaultKeyspaceGroupID)
 	args := []string{"-u", pdAddr, "keyspace-group"}
 	testutil.Eventually(re, func() bool {
 		output, err := tests.ExecuteCommand(cmd, append(args, defaultKeyspaceGroupID)...)
@@ -197,7 +195,7 @@ func TestSetNodeAndPriorityKeyspaceGroup(t *testing.T) {
 	for i := range 10 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 3, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 3, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -217,7 +215,7 @@ func TestSetNodeAndPriorityKeyspaceGroup(t *testing.T) {
 	re.NoError(leaderServer.BootstrapCluster())
 
 	// set-node keyspace group.
-	defaultKeyspaceGroupID := strconv.FormatUint(uint64(constant.DefaultKeyspaceGroupID), 10)
+	defaultKeyspaceGroupID := fmt.Sprintf("%d", constant.DefaultKeyspaceGroupID)
 	testutil.Eventually(re, func() bool {
 		args := []string{"-u", pdAddr, "keyspace-group", "set-node", defaultKeyspaceGroupID, tsoAddrs[0], tsoAddrs[1]}
 		output, err := tests.ExecuteCommand(cmd, args...)
@@ -301,7 +299,7 @@ func TestMergeKeyspaceGroup(t *testing.T) {
 	for i := range 129 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 1, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 1, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -355,7 +353,7 @@ func TestMergeKeyspaceGroup(t *testing.T) {
 
 	// split keyspace group multiple times.
 	for i := 1; i <= 10; i++ {
-		splitTargetID := strconv.Itoa(i)
+		splitTargetID := fmt.Sprintf("%d", i)
 		testutil.Eventually(re, func() bool {
 			args := []string{"-u", pdAddr, "keyspace-group", "split", "0", splitTargetID, splitTargetID}
 			output, err := tests.ExecuteCommand(cmd, args...)
@@ -420,7 +418,7 @@ func TestKeyspaceGroupState(t *testing.T) {
 	for i := range 10 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 1, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 1, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -511,7 +509,7 @@ func TestShowKeyspaceGroupPrimary(t *testing.T) {
 	for i := range 10 {
 		keyspaces = append(keyspaces, fmt.Sprintf("keyspace_%d", i))
 	}
-	tc, err := pdTests.NewTestClusterWithKeyspaceGroup(ctx, 1, func(conf *config.Config, _ string) {
+	tc, err := pdTests.NewTestAPICluster(ctx, 1, func(conf *config.Config, _ string) {
 		conf.Keyspace.PreAlloc = keyspaces
 	})
 	re.NoError(err)
@@ -529,7 +527,7 @@ func TestShowKeyspaceGroupPrimary(t *testing.T) {
 	tc.WaitLeader()
 	leaderServer := tc.GetLeaderServer()
 	re.NoError(leaderServer.BootstrapCluster())
-	defaultKeyspaceGroupID := strconv.FormatUint(uint64(constant.DefaultKeyspaceGroupID), 10)
+	defaultKeyspaceGroupID := fmt.Sprintf("%d", constant.DefaultKeyspaceGroupID)
 
 	// check keyspace group 0 information.
 	var keyspaceGroup endpoint.KeyspaceGroup
@@ -597,7 +595,7 @@ func TestShowKeyspaceGroupPrimary(t *testing.T) {
 	re.NoError(failpoint.Disable("github.com/tikv/pd/server/delayStartServerLoop"))
 }
 
-func TestCmdWithoutKeyspaceGroupInitialized(t *testing.T) {
+func TestInPDMode(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

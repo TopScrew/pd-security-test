@@ -7,7 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under the License is distributed on an "AS IS" BASIS,g
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -18,26 +18,22 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pingcap/log"
-
+	"github.com/prometheus/client_golang/prometheus"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/clients/metastorage"
 	"github.com/tikv/pd/client/errs"
-	"github.com/tikv/pd/client/opt"
+	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -89,9 +85,11 @@ type ResourceGroupProvider interface {
 	ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error)
 	DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error)
 	AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error)
-	LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error)
 
-	metastorage.Client
+	// meta storage client
+	LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error)
+	Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error)
+	Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error)
 }
 
 // ResourceControlCreateOption create a ResourceGroupsController with the optional settings.
@@ -272,13 +270,13 @@ func (c *ResourceGroupsController) Start(ctx context.Context) {
 		var watchMetaChannel, watchConfigChannel chan []*meta_storagepb.Event
 		if !c.ruConfig.isSingleGroupByKeyspace {
 			// Use WithPrevKV() to get the previous key-value pair when get Delete Event.
-			watchMetaChannel, err = c.provider.Watch(ctx, pd.GroupSettingsPathPrefixBytes, opt.WithRev(metaRevision), opt.WithPrefix(), opt.WithPrevKV())
+			watchMetaChannel, err = c.provider.Watch(ctx, pd.GroupSettingsPathPrefixBytes, pd.WithRev(metaRevision), pd.WithPrefix(), pd.WithPrevKV())
 			if err != nil {
 				log.Warn("watch resource group meta failed", zap.Error(err))
 			}
 		}
 
-		watchConfigChannel, err = c.provider.Watch(ctx, pd.ControllerConfigPathPrefixBytes, opt.WithRev(cfgRevision), opt.WithPrefix())
+		watchConfigChannel, err = c.provider.Watch(ctx, pd.ControllerConfigPathPrefixBytes, pd.WithRev(cfgRevision), pd.WithPrefix())
 		if err != nil {
 			log.Warn("watch resource group config failed", zap.Error(err))
 		}
@@ -299,7 +297,7 @@ func (c *ResourceGroupsController) Start(ctx context.Context) {
 			case <-watchRetryTimer.C:
 				if !c.ruConfig.isSingleGroupByKeyspace && watchMetaChannel == nil {
 					// Use WithPrevKV() to get the previous key-value pair when get Delete Event.
-					watchMetaChannel, err = c.provider.Watch(ctx, pd.GroupSettingsPathPrefixBytes, opt.WithRev(metaRevision), opt.WithPrefix(), opt.WithPrevKV())
+					watchMetaChannel, err = c.provider.Watch(ctx, pd.GroupSettingsPathPrefixBytes, pd.WithRev(metaRevision), pd.WithPrefix(), pd.WithPrevKV())
 					if err != nil {
 						log.Warn("watch resource group meta failed", zap.Error(err))
 						watchRetryTimer.Reset(watchRetryInterval)
@@ -309,7 +307,7 @@ func (c *ResourceGroupsController) Start(ctx context.Context) {
 					}
 				}
 				if watchConfigChannel == nil {
-					watchConfigChannel, err = c.provider.Watch(ctx, pd.ControllerConfigPathPrefixBytes, opt.WithRev(cfgRevision), opt.WithPrefix())
+					watchConfigChannel, err = c.provider.Watch(ctx, pd.ControllerConfigPathPrefixBytes, pd.WithRev(cfgRevision), pd.WithPrefix())
 					if err != nil {
 						log.Warn("watch resource group config failed", zap.Error(err))
 						watchRetryTimer.Reset(watchRetryInterval)
@@ -640,7 +638,7 @@ func (c *ResourceGroupsController) sendTokenBucketRequests(ctx context.Context, 
 // OnRequestWait is used to check whether resource group has enough tokens. It maybe needs to wait some time.
 func (c *ResourceGroupsController) OnRequestWait(
 	ctx context.Context, resourceGroupName string, info RequestInfo,
-) (delta, penalty *rmpb.Consumption, waitDuration time.Duration, priority uint32, err error) {
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
 	gc, err := c.tryGetResourceGroupController(ctx, resourceGroupName, true)
 	if err != nil {
 		return nil, nil, time.Duration(0), 0, err
@@ -1391,8 +1389,8 @@ retryLoop:
 
 func (gc *groupCostController) onRequestWaitImpl(
 	ctx context.Context, info RequestInfo,
-) (delta, penalty *rmpb.Consumption, waitDuration time.Duration, priority uint32, err error) {
-	delta = &rmpb.Consumption{}
+) (*rmpb.Consumption, *rmpb.Consumption, time.Duration, uint32, error) {
+	delta := &rmpb.Consumption{}
 	for _, calc := range gc.calculators {
 		calc.BeforeKVRequest(delta, info)
 	}
@@ -1400,6 +1398,7 @@ func (gc *groupCostController) onRequestWaitImpl(
 	gc.mu.Lock()
 	add(gc.mu.consumption, delta)
 	gc.mu.Unlock()
+	var waitDuration time.Duration
 
 	if !gc.burstable.Load() {
 		d, err := gc.acquireTokens(ctx, delta, &waitDuration, false)
@@ -1424,7 +1423,7 @@ func (gc *groupCostController) onRequestWaitImpl(
 
 	gc.mu.Lock()
 	// Calculate the penalty of the store
-	penalty = &rmpb.Consumption{}
+	penalty := &rmpb.Consumption{}
 	if storeCounter, exist := gc.mu.storeCounter[info.StoreID()]; exist {
 		*penalty = *gc.mu.globalCounter
 		sub(penalty, storeCounter)

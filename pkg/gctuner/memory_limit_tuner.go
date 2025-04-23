@@ -20,14 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-
 	util "github.com/tikv/pd/pkg/gogc"
 	"github.com/tikv/pd/pkg/memory"
 	"github.com/tikv/pd/pkg/utils/logutil"
+	"go.uber.org/zap"
 )
 
 // GlobalMemoryLimitTuner only allow one memory limit tuner in one process

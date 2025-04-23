@@ -23,13 +23,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
@@ -44,6 +41,7 @@ import (
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -1352,7 +1350,7 @@ func (bs *balanceSolver) splitBucketsOperator(region *core.RegionInfo, keys [][]
 
 	op, err := operator.CreateSplitRegionOperator(desc, region, operator.OpSplit, pdpb.CheckPolicy_USEKEY, splitKeys)
 	if err != nil {
-		log.Debug("fail to create split operator",
+		log.Error("fail to create split operator",
 			zap.Stringer("resource-type", bs.resourceTy),
 			errs.ZapError(err))
 		return nil

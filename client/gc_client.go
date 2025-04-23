@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,13 +19,10 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/client/errs"
-	"github.com/tikv/pd/client/metrics"
+	"go.uber.org/zap"
 )
 
 // GCClient is a client for doing GC
@@ -42,9 +39,9 @@ func (c *client) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, saf
 		defer span.Finish()
 	}
 	start := time.Now()
-	defer func() { metrics.CmdDurationUpdateGCSafePointV2.Observe(time.Since(start).Seconds()) }()
+	defer func() { cmdDurationUpdateGCSafePointV2.Observe(time.Since(start).Seconds()) }()
 
-	ctx, cancel := context.WithTimeout(ctx, c.inner.option.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.option.timeout)
 	req := &pdpb.UpdateGCSafePointV2Request{
 		Header:     c.requestHeader(),
 		KeyspaceId: keyspaceID,
@@ -58,7 +55,7 @@ func (c *client) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, saf
 	resp, err := protoClient.UpdateGCSafePointV2(ctx, req)
 	cancel()
 
-	if err = c.respForErr(metrics.CmdFailedDurationUpdateGCSafePointV2, start, err, resp.GetHeader()); err != nil {
+	if err = c.respForErr(cmdFailedDurationUpdateGCSafePointV2, start, err, resp.GetHeader()); err != nil {
 		return 0, err
 	}
 	return resp.GetNewSafePoint(), nil
@@ -71,9 +68,9 @@ func (c *client) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32
 		defer span.Finish()
 	}
 	start := time.Now()
-	defer func() { metrics.CmdDurationUpdateServiceSafePointV2.Observe(time.Since(start).Seconds()) }()
+	defer func() { cmdDurationUpdateServiceSafePointV2.Observe(time.Since(start).Seconds()) }()
 
-	ctx, cancel := context.WithTimeout(ctx, c.inner.option.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.option.timeout)
 	req := &pdpb.UpdateServiceSafePointV2Request{
 		Header:     c.requestHeader(),
 		KeyspaceId: keyspaceID,
@@ -88,7 +85,7 @@ func (c *client) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32
 	}
 	resp, err := protoClient.UpdateServiceSafePointV2(ctx, req)
 	cancel()
-	if err = c.respForErr(metrics.CmdFailedDurationUpdateServiceSafePointV2, start, err, resp.GetHeader()); err != nil {
+	if err = c.respForErr(cmdFailedDurationUpdateServiceSafePointV2, start, err, resp.GetHeader()); err != nil {
 		return 0, err
 	}
 	return resp.GetMinSafePoint(), nil
@@ -102,7 +99,7 @@ func (c *client) WatchGCSafePointV2(ctx context.Context, revision int64) (chan [
 		Revision: revision,
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.inner.option.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.option.timeout)
 	defer cancel()
 	protoClient, ctx := c.getClientAndContext(ctx)
 	if protoClient == nil {

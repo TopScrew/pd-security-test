@@ -21,10 +21,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/unrolled/render"
-
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
 )
 
 type hotStatusHandler struct {

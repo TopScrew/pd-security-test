@@ -1,4 +1,4 @@
-// Copyright 2024 TiKV Project Authors.
+// Copyright 2024 TiKV Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,24 +21,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/suite"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/log"
-
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/client/http"
-	"github.com/tikv/pd/client/pkg/utils/testutil"
+	"github.com/tikv/pd/client/testutil"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/types"
+	"go.uber.org/zap"
 )
 
 type schedulerSuite struct {
-	clusterSuite
+	realClusterSuite
 }
 
 func TestScheduler(t *testing.T) {
 	suite.Run(t, &schedulerSuite{
-		clusterSuite: clusterSuite{
+		realClusterSuite: realClusterSuite{
 			suiteName: "scheduler",
 		},
 	})
@@ -47,12 +46,11 @@ func TestScheduler(t *testing.T) {
 // https://github.com/tikv/pd/issues/6988#issuecomment-1694924611
 // https://github.com/tikv/pd/issues/6897
 func (s *schedulerSuite) TestTransferLeader() {
-	re := s.Require()
+	re := require.New(s.T())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(re))
-	defer pdHTTPCli.Close()
+	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(s.T()))
 	resp, err := pdHTTPCli.GetLeader(ctx)
 	re.NoError(err)
 	oldLeader := resp.Name
@@ -98,12 +96,11 @@ func (s *schedulerSuite) TestTransferLeader() {
 }
 
 func (s *schedulerSuite) TestRegionLabelDenyScheduler() {
-	re := s.Require()
+	re := require.New(s.T())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(re))
-	defer pdHTTPCli.Close()
+	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(s.T()))
 	regions, err := pdHTTPCli.GetRegions(ctx)
 	re.NoError(err)
 	re.NotEmpty(regions.Regions)
@@ -208,12 +205,11 @@ func (s *schedulerSuite) TestRegionLabelDenyScheduler() {
 }
 
 func (s *schedulerSuite) TestGrantOrEvictLeaderTwice() {
-	re := s.Require()
+	re := require.New(s.T())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(re))
-	defer pdHTTPCli.Close()
+	pdHTTPCli := http.NewClient("pd-real-cluster-test", getPDEndpoints(s.T()))
 	regions, err := pdHTTPCli.GetRegions(ctx)
 	re.NoError(err)
 	re.NotEmpty(regions.Regions)

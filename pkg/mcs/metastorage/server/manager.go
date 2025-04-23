@@ -15,18 +15,19 @@
 package server
 
 import (
+	"github.com/pingcap/log"
+	bs "github.com/tikv/pd/pkg/basicserver"
+	"github.com/tikv/pd/pkg/storage/endpoint"
+	"github.com/tikv/pd/pkg/storage/kv"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
-
-	"github.com/pingcap/log"
-
-	bs "github.com/tikv/pd/pkg/basicserver"
 )
 
-// Manager is the manager of meta storage.
+// Manager is the manager of resource group.
 type Manager struct {
-	srv    bs.Server
-	client *clientv3.Client
+	srv     bs.Server
+	client  *clientv3.Client
+	storage *endpoint.StorageEndpoint
 }
 
 // NewManager returns a new Manager.
@@ -35,6 +36,10 @@ func NewManager(srv bs.Server) *Manager {
 	// The first initialization after the server is started.
 	srv.AddStartCallback(func() {
 		log.Info("meta storage starts to initialize", zap.String("name", srv.Name()))
+		m.storage = endpoint.NewStorageEndpoint(
+			kv.NewEtcdKVBase(srv.GetClient(), "meta_storage"),
+			nil,
+		)
 		m.client = srv.GetClient()
 		m.srv = srv
 	})

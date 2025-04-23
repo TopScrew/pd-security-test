@@ -22,10 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server/config"
@@ -59,7 +57,7 @@ func (suite *operatorTestSuite) TearDownSuite() {
 }
 
 func (suite *operatorTestSuite) TestOperator() {
-	suite.env.RunTest(suite.checkOperator)
+	suite.env.RunTestBasedOnMode(suite.checkOperator)
 }
 
 func (suite *operatorTestSuite) checkOperator(cluster *pdTests.TestCluster) {

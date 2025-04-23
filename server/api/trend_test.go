@@ -19,10 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	tu "github.com/tikv/pd/pkg/utils/testutil"

@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/tidb-dashboard/pkg/apiserver"
 	"github.com/pingcap/tidb-dashboard/pkg/utils"
-
 	"github.com/tikv/pd/pkg/utils/syncutil"
 )
 

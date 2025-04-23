@@ -22,13 +22,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-
-	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core"
 	sc "github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/slice"
@@ -84,7 +82,7 @@ func (suite *schedulerTestSuite) TearDownTest() {
 				return currentSchedulers[i] == scheduler
 			}) {
 				echo := mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", scheduler}, nil)
-				re.Contains(echo, "Success!", scheduler)
+				re.Contains(echo, "Success!")
 			}
 		}
 		for _, scheduler := range currentSchedulers {
@@ -96,7 +94,7 @@ func (suite *schedulerTestSuite) TearDownTest() {
 			}
 		}
 	}
-	suite.env.RunTest(cleanFunc)
+	suite.env.RunTestBasedOnMode(cleanFunc)
 	suite.env.Cleanup()
 }
 
@@ -109,7 +107,7 @@ func (suite *schedulerTestSuite) checkDefaultSchedulers(re *require.Assertions, 
 }
 
 func (suite *schedulerTestSuite) TestScheduler() {
-	suite.env.RunTest(suite.checkScheduler)
+	suite.env.RunTestBasedOnMode(suite.checkScheduler)
 }
 
 func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
@@ -177,37 +175,30 @@ func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
 	schedulers := []string{"evict-leader-scheduler", "grant-leader-scheduler", "evict-leader-scheduler", "grant-leader-scheduler"}
 
 	checkStorePause := func(changedStores []uint64, schedulerName string) {
+		status := func() string {
+			switch schedulerName {
+			case "evict-leader-scheduler":
+				return "paused"
+			case "grant-leader-scheduler":
+				return "resumed"
+			default:
+				re.Fail(fmt.Sprintf("unknown scheduler %s", schedulerName))
+				return ""
+			}
+		}()
 		for _, store := range stores {
-			storeInfo := cluster.GetLeaderServer().GetRaftCluster().GetStore(store.GetId())
-			status, isStorePaused := func() (string, bool) {
-				switch schedulerName {
-				case "evict-leader-scheduler":
-					return "paused", !storeInfo.AllowLeaderTransferIn()
-				case "grant-leader-scheduler":
-					return "paused", !storeInfo.AllowLeaderTransferOut()
-				default:
-					re.Failf("unknown scheduler %s", schedulerName)
-					return "", false
-				}
-			}()
+			isStorePaused := !cluster.GetLeaderServer().GetRaftCluster().GetStore(store.GetId()).AllowLeaderTransfer()
 			if slice.AnyOf(changedStores, func(i int) bool {
 				return store.GetId() == changedStores[i]
 			}) {
-				re.Truef(isStorePaused,
-					"store %d should be %s with %s", store.GetId(), status, schedulerName)
+				re.True(isStorePaused,
+					fmt.Sprintf("store %d should be %s with %s", store.GetId(), status, schedulerName))
 			} else {
-				re.Falsef(isStorePaused,
-					"store %d should not be %s with %s", store.GetId(), status, schedulerName)
+				re.False(isStorePaused,
+					fmt.Sprintf("store %d should not be %s with %s", store.GetId(), status, schedulerName))
 			}
 			if sche := cluster.GetSchedulingPrimaryServer(); sche != nil {
-				switch schedulerName {
-				case "evict-leader-scheduler":
-					re.Equal(isStorePaused, !sche.GetCluster().GetStore(store.GetId()).AllowLeaderTransferIn())
-				case "grant-leader-scheduler":
-					re.Equal(isStorePaused, !sche.GetCluster().GetStore(store.GetId()).AllowLeaderTransferOut())
-				default:
-					re.Failf("unknown scheduler %s", schedulerName)
-				}
+				re.Equal(isStorePaused, !sche.GetCluster().GetStore(store.GetId()).AllowLeaderTransfer())
 			}
 		}
 	}
@@ -408,7 +399,7 @@ func (suite *schedulerTestSuite) checkScheduler(cluster *pdTests.TestCluster) {
 }
 
 func (suite *schedulerTestSuite) TestSchedulerConfig() {
-	suite.env.RunTest(suite.checkSchedulerConfig)
+	suite.env.RunTestBasedOnMode(suite.checkSchedulerConfig)
 }
 
 func (suite *schedulerTestSuite) checkSchedulerConfig(cluster *pdTests.TestCluster) {
@@ -541,30 +532,6 @@ func (suite *schedulerTestSuite) checkSchedulerConfig(cluster *pdTests.TestClust
 		return !strings.Contains(echo, "evict-leader-scheduler")
 	})
 
-	// test balance key range scheduler
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "balance-range-scheduler"}, nil)
-	re.NotContains(echo, "Success!")
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "balance-range-scheduler", "--format=raw", "tiflash", "learner", "test", "a", "b"}, nil)
-	re.Contains(echo, "Success!")
-	var rangeConf []map[string]any
-	var jobConf map[string]any
-	testutil.Eventually(re, func() bool {
-		mightExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "balance-range-scheduler"}, &rangeConf)
-		jobConf = rangeConf[0]
-		return jobConf["role"] == "learner" && jobConf["engine"] == "tiflash" && jobConf["alias"] == "test"
-	})
-	re.Equal(float64(time.Hour.Nanoseconds()), jobConf["timeout"])
-	re.Equal("pending", jobConf["status"])
-	ranges := jobConf["ranges"].([]any)[0].(map[string]any)
-	re.Equal(core.HexRegionKeyStr([]byte("a")), ranges["start-key"])
-	re.Equal(core.HexRegionKeyStr([]byte("b")), ranges["end-key"])
-
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "balance-range-scheduler", "--format=raw", "tiflash", "learner", "learner", "a", "b"}, nil)
-	re.Contains(echo, "400")
-	re.Contains(echo, "scheduler already exists")
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "remove", "balance-range-scheduler"}, nil)
-	re.Contains(echo, "Success!")
-
 	// test balance leader config
 	conf = make(map[string]any)
 	conf1 := make(map[string]any)
@@ -590,26 +557,10 @@ func (suite *schedulerTestSuite) checkSchedulerConfig(cluster *pdTests.TestClust
 	})
 	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "balance-leader-scheduler"}, nil)
 	re.Contains(echo, "Success!")
-
-	// test evict slow store scheduler
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "add", "evict-slow-store-scheduler"}, nil)
-	re.Contains(echo, "Success!")
-	conf = make(map[string]any)
-	conf1 = make(map[string]any)
-	testutil.Eventually(re, func() bool {
-		mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "evict-slow-store-scheduler", "show"}, &conf)
-		return conf["batch"] == 3.
-	})
-	echo = mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "evict-slow-store-scheduler", "set", "batch", "10"}, nil)
-	re.Contains(echo, "Success!")
-	testutil.Eventually(re, func() bool {
-		mustExec(re, cmd, []string{"-u", pdAddr, "scheduler", "config", "evict-slow-store-scheduler"}, &conf1)
-		return conf1["batch"] == 10.
-	})
 }
 
 func (suite *schedulerTestSuite) TestGrantHotRegionScheduler() {
-	suite.env.RunTest(suite.checkGrantHotRegionScheduler)
+	suite.env.RunTestBasedOnMode(suite.checkGrantHotRegionScheduler)
 }
 
 func (suite *schedulerTestSuite) checkGrantHotRegionScheduler(cluster *pdTests.TestCluster) {
@@ -725,7 +676,7 @@ func (suite *schedulerTestSuite) checkGrantHotRegionScheduler(cluster *pdTests.T
 }
 
 func (suite *schedulerTestSuite) TestHotRegionSchedulerConfig() {
-	suite.env.RunTest(suite.checkHotRegionSchedulerConfig)
+	suite.env.RunTestBasedOnMode(suite.checkHotRegionSchedulerConfig)
 }
 
 func (suite *schedulerTestSuite) checkHotRegionSchedulerConfig(cluster *pdTests.TestCluster) {
@@ -889,7 +840,7 @@ func (suite *schedulerTestSuite) checkHotRegionSchedulerConfig(cluster *pdTests.
 }
 
 func (suite *schedulerTestSuite) TestSchedulerDiagnostic() {
-	suite.env.RunTest(suite.checkSchedulerDiagnostic)
+	suite.env.RunTestBasedOnMode(suite.checkSchedulerDiagnostic)
 }
 
 func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestCluster) {
@@ -953,7 +904,7 @@ func (suite *schedulerTestSuite) checkSchedulerDiagnostic(cluster *pdTests.TestC
 }
 
 func (suite *schedulerTestSuite) TestEvictLeaderScheduler() {
-	suite.env.RunTest(suite.checkEvictLeaderScheduler)
+	suite.env.RunTestBasedOnMode(suite.checkEvictLeaderScheduler)
 }
 
 func (suite *schedulerTestSuite) checkEvictLeaderScheduler(cluster *pdTests.TestCluster) {

@@ -21,12 +21,10 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/pingcap/log"
+	"github.com/tikv/pd/pkg/errs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"github.com/pingcap/log"
-
-	"github.com/tikv/pd/pkg/errs"
 )
 
 // FileLogConfig serializes file log related config in toml/json.

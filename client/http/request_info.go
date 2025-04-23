@@ -17,9 +17,8 @@ package http
 import (
 	"fmt"
 
+	"github.com/tikv/pd/client/retry"
 	"go.uber.org/zap"
-
-	"github.com/tikv/pd/client/pkg/retry"
 )
 
 // The following constants are the names of the requests.
@@ -76,8 +75,8 @@ const (
 	accelerateScheduleName                  = "AccelerateSchedule"
 	accelerateScheduleInBatchName           = "AccelerateScheduleInBatch"
 	getMinResolvedTSByStoresIDsName         = "GetMinResolvedTSByStoresIDs"
-	getMicroserviceMembersName              = "GetMicroserviceMembers"
-	getMicroservicePrimaryName              = "GetMicroservicePrimary"
+	getMicroServiceMembersName              = "GetMicroServiceMembers"
+	getMicroServicePrimaryName              = "GetMicroServicePrimary"
 	getPDVersionName                        = "GetPDVersion"
 	resetTSName                             = "ResetTS"
 	resetBaseAllocIDName                    = "ResetBaseAllocID"

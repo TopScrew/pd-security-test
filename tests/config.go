@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
-
 	"github.com/tikv/pd/pkg/utils/tempurl"
 	"github.com/tikv/pd/server/config"
 )

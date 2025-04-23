@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 )
 

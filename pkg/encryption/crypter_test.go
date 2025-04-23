@@ -19,9 +19,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/encryptionpb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncryptionMethodSupported(t *testing.T) {

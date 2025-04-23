@@ -26,8 +26,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
-	"github.com/tikv/pd/client/pkg/retry"
+	"github.com/tikv/pd/client/retry"
 )
 
 // Client is a PD (Placement Driver) HTTP client.
@@ -103,9 +102,9 @@ type Client interface {
 	GetPDVersion(context.Context) (string, error)
 	GetGCSafePoint(context.Context) (ListServiceGCSafepoint, error)
 	DeleteGCSafePoint(context.Context, string) (string, error)
-	/* Microservice interfaces */
-	GetMicroserviceMembers(context.Context, string) ([]MicroserviceMember, error)
-	GetMicroservicePrimary(context.Context, string) (string, error)
+	/* Micro Service interfaces */
+	GetMicroServiceMembers(context.Context, string) ([]MicroServiceMember, error)
+	GetMicroServicePrimary(context.Context, string) (string, error)
 	DeleteOperators(context.Context) error
 
 	/* Keyspace interface */
@@ -914,7 +913,7 @@ func (c *client) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uin
 	if len(storeIDs) != 0 {
 		storeIDStrs := make([]string, len(storeIDs))
 		for idx, id := range storeIDs {
-			storeIDStrs[idx] = strconv.FormatUint(id, 10)
+			storeIDStrs[idx] = fmt.Sprintf("%d", id)
 		}
 		uri = fmt.Sprintf("%s?scope=%s", uri, strings.Join(storeIDStrs, ","))
 	}
@@ -937,12 +936,12 @@ func (c *client) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uin
 	return resp.MinResolvedTS, resp.StoresMinResolvedTS, nil
 }
 
-// GetMicroserviceMembers gets the members of the microservice.
-func (c *client) GetMicroserviceMembers(ctx context.Context, service string) ([]MicroserviceMember, error) {
-	var members []MicroserviceMember
+// GetMicroServiceMembers gets the members of the microservice.
+func (c *client) GetMicroServiceMembers(ctx context.Context, service string) ([]MicroServiceMember, error) {
+	var members []MicroServiceMember
 	err := c.request(ctx, newRequestInfo().
-		WithName(getMicroserviceMembersName).
-		WithURI(MicroserviceMembers(service)).
+		WithName(getMicroServiceMembersName).
+		WithURI(MicroServiceMembers(service)).
 		WithMethod(http.MethodGet).
 		WithResp(&members))
 	if err != nil {
@@ -951,12 +950,12 @@ func (c *client) GetMicroserviceMembers(ctx context.Context, service string) ([]
 	return members, nil
 }
 
-// GetMicroservicePrimary gets the primary of the microservice.
-func (c *client) GetMicroservicePrimary(ctx context.Context, service string) (string, error) {
+// GetMicroServicePrimary gets the primary of the microservice.
+func (c *client) GetMicroServicePrimary(ctx context.Context, service string) (string, error) {
 	var primary string
 	err := c.request(ctx, newRequestInfo().
-		WithName(getMicroservicePrimaryName).
-		WithURI(MicroservicePrimary(service)).
+		WithName(getMicroServicePrimaryName).
+		WithURI(MicroServicePrimary(service)).
 		WithMethod(http.MethodGet).
 		WithResp(&primary))
 	return primary, err

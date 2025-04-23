@@ -1,17 +1,3 @@
-// Copyright 2023 TiKV Project Authors.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package server
 
 import (
@@ -21,15 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/schedulingpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/cluster"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
@@ -52,6 +35,7 @@ import (
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
+	"go.uber.org/zap"
 )
 
 // Cluster is used to manage all information for scheduling purpose.
@@ -69,7 +53,7 @@ type Cluster struct {
 	storage           storage.Storage
 	coordinator       *schedule.Coordinator
 	checkMembershipCh chan struct{}
-	pdLeader          atomic.Value
+	apiServerLeader   atomic.Value
 	running           atomic.Bool
 
 	// heartbeatRunner is used to process the subtree update task asynchronously.
@@ -127,7 +111,7 @@ func NewCluster(
 		logRunner:       ratelimit.NewConcurrentRunner(logTaskRunner, ratelimit.NewConcurrencyLimiter(uint64(runtime.NumCPU()*2)), time.Minute),
 	}
 	c.coordinator = schedule.NewCoordinator(ctx, c, hbStreams)
-	err = c.ruleManager.Initialize(persistConfig.GetMaxReplicas(), persistConfig.GetLocationLabels(), persistConfig.GetIsolationLevel(), true)
+	err = c.ruleManager.Initialize(persistConfig.GetMaxReplicas(), persistConfig.GetLocationLabels(), persistConfig.GetIsolationLevel())
 	if err != nil {
 		cancel()
 		return nil, err
@@ -239,32 +223,27 @@ func (c *Cluster) GetSchedulerConfig() sc.SchedulerConfigProvider { return c.per
 // GetStoreConfig returns the store config.
 func (c *Cluster) GetStoreConfig() sc.StoreConfigProvider { return c.persistConfig }
 
-// AllocID allocates new IDs.
-func (c *Cluster) AllocID(count uint32) (uint64, uint32, error) {
-	client, err := c.getPDLeaderClient()
+// AllocID allocates a new ID.
+func (c *Cluster) AllocID() (uint64, error) {
+	client, err := c.getAPIServerLeaderClient()
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, requestTimeout)
 	defer cancel()
-	req := &pdpb.AllocIDRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}, Count: count}
-
-	failpoint.Inject("allocIDNonBatch", func() {
-		req = &pdpb.AllocIDRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}}
-	})
-	resp, err := client.AllocID(ctx, req)
+	resp, err := client.AllocID(ctx, &pdpb.AllocIDRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}})
 	if err != nil {
 		c.triggerMembershipCheck()
-		return 0, 0, err
+		return 0, err
 	}
-	return resp.GetId(), resp.GetCount(), nil
+	return resp.GetId(), nil
 }
 
-func (c *Cluster) getPDLeaderClient() (pdpb.PDClient, error) {
-	cli := c.pdLeader.Load()
+func (c *Cluster) getAPIServerLeaderClient() (pdpb.PDClient, error) {
+	cli := c.apiServerLeader.Load()
 	if cli == nil {
 		c.triggerMembershipCheck()
-		return nil, errors.New("PD leader is not found")
+		return nil, errors.New("API server leader is not found")
 	}
 	return cli.(pdpb.PDClient), nil
 }
@@ -276,10 +255,10 @@ func (c *Cluster) triggerMembershipCheck() {
 	}
 }
 
-// SwitchPDLeader switches the PD leader.
-func (c *Cluster) SwitchPDLeader(new pdpb.PDClient) bool {
-	old := c.pdLeader.Load()
-	return c.pdLeader.CompareAndSwap(old, new)
+// SwitchAPIServerLeader switches the API server leader.
+func (c *Cluster) SwitchAPIServerLeader(new pdpb.PDClient) bool {
+	old := c.apiServerLeader.Load()
+	return c.apiServerLeader.CompareAndSwap(old, new)
 }
 
 func trySend(notifier chan struct{}) {
@@ -333,11 +312,7 @@ func (c *Cluster) updateScheduler() {
 		)
 		// Create the newly added schedulers.
 		for _, scheduler := range latestSchedulersConfig {
-			schedulerType, ok := types.ConvertOldStrToType[scheduler.Type]
-			if !ok {
-				log.Error("scheduler not found", zap.String("type", scheduler.Type))
-				continue
-			}
+			schedulerType := types.ConvertOldStrToType[scheduler.Type]
 			s, err := schedulers.CreateScheduler(
 				schedulerType,
 				c.coordinator.GetOperatorController(),
@@ -437,6 +412,9 @@ func (c *Cluster) HandleStoreHeartbeat(heartbeat *schedulingpb.StoreHeartbeatReq
 	nowTime := time.Now()
 	newStore := store.Clone(core.SetStoreStats(stats), core.SetLastHeartbeatTS(nowTime))
 
+	if store := c.GetStore(storeID); store != nil {
+		statistics.UpdateStoreHeartbeatMetrics(store)
+	}
 	c.PutStore(newStore)
 	c.hotStat.Observe(storeID, newStore.GetStoreStats())
 	c.hotStat.FilterUnhealthyStore(c)

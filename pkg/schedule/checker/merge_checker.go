@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"

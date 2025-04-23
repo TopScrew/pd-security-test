@@ -23,13 +23,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/spf13/cobra"
+	"github.com/tikv/pd/pkg/response"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
-
-	"github.com/pingcap/kvproto/pkg/metapb"
-
-	"github.com/tikv/pd/pkg/response"
 )
 
 var (
@@ -53,6 +51,7 @@ func NewStoreCommand() *cobra.Command {
 	s.AddCommand(NewSetStoreWeightCommand())
 	s.AddCommand(NewStoreLimitCommand())
 	s.AddCommand(NewRemoveTombStoneCommand())
+	s.AddCommand(NewStoreLimitSceneCommand())
 	s.AddCommand(NewStoreCheckCommand())
 	s.Flags().String("jq", "", "jq query")
 	s.Flags().StringSlice("state", nil, "state filter")
@@ -64,7 +63,7 @@ func NewDeleteStoreByAddrCommand() *cobra.Command {
 	d := &cobra.Command{
 		Use:   "addr <address>",
 		Short: "delete store by its address",
-		RunE:  deleteStoreCommandByAddrFunc,
+		Run:   deleteStoreCommandByAddrFunc,
 	}
 	return d
 }
@@ -230,6 +229,56 @@ func NewSetAllLimitCommand() *cobra.Command {
 	}
 }
 
+// NewStoreLimitSceneCommand returns a limit-scene command for store command
+func NewStoreLimitSceneCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "limit-scene [<type>]|[<scene> <rate> <type>]",
+		Short: "show or set the limit value for a scene",
+		Long:  "show or set the limit value for a scene, <type> can be 'add-peer'(default) or 'remove-peer'",
+		Run:   storeLimitSceneCommandFunc,
+	}
+}
+
+func storeLimitSceneCommandFunc(cmd *cobra.Command, args []string) {
+	var resp string
+	var err error
+	prefix := fmt.Sprintf("%s/limit/scene", storesPrefix)
+
+	switch len(args) {
+	case 0, 1:
+		// show all limit values
+		if len(args) == 1 {
+			prefix += fmt.Sprintf("?type=%v", args[0])
+		}
+		resp, err = doRequest(cmd, prefix, http.MethodGet, http.Header{})
+		if err != nil {
+			cmd.Println(err)
+			return
+		}
+		cmd.Println(resp)
+	case 2, 3:
+		// set limit value for a scene
+		scene := args[0]
+		if scene != "idle" &&
+			scene != "low" &&
+			scene != "normal" &&
+			scene != "high" {
+			cmd.Println("invalid scene")
+			return
+		}
+
+		rate, err := strconv.Atoi(args[1])
+		if err != nil {
+			cmd.Println(err)
+			return
+		}
+		if len(args) == 3 {
+			prefix = path.Join(prefix, fmt.Sprintf("?type=%s", args[2]))
+		}
+		postJSON(cmd, prefix, map[string]any{scene: rate})
+	}
+}
+
 func convertToStoreInfo(content string) string {
 	store := &response.StoreInfo{}
 	err := json.Unmarshal([]byte(content), store)
@@ -329,19 +378,19 @@ func deleteStoreCommandFunc(cmd *cobra.Command, args []string) {
 	cmd.Println("Success!")
 }
 
-func deleteStoreCommandByAddrFunc(cmd *cobra.Command, args []string) error {
+func deleteStoreCommandByAddrFunc(cmd *cobra.Command, args []string) {
 	id := getStoreID(cmd, args, false)
 	if id == -1 {
-		return fmt.Errorf("address not found: %s", args[0])
+		return
 	}
 	// delete store by its ID
 	prefix := fmt.Sprintf(storePrefix, id)
 	_, err := doRequest(cmd, prefix, http.MethodDelete, http.Header{})
 	if err != nil {
-		return fmt.Errorf("failed to delete store %s: %s", args[0], err)
+		cmd.Printf("Failed to delete store %s: %s\n", args[0], err)
+		return
 	}
 	cmd.Println("Success!")
-	return nil
 }
 
 func cancelDeleteStoreCommandFunc(cmd *cobra.Command, args []string) {
@@ -387,10 +436,6 @@ func cancelDeleteStoreCommandFunc(cmd *cobra.Command, args []string) {
 
 func cancelDeleteStoreCommandByAddrFunc(cmd *cobra.Command, args []string) {
 	id := getStoreID(cmd, args, true)
-	if id == -1 {
-		cmd.Printf("address not found: %s\n", args[0])
-		return
-	}
 	if id == 0 {
 		return
 	}
@@ -445,6 +490,9 @@ func getStoreID(cmd *cobra.Command, args []string, isCancel bool) (id int) {
 		}
 	}
 
+	if id == -1 {
+		cmd.Printf("address not found: %s\n", addr)
+	}
 	return
 }
 
@@ -566,7 +614,7 @@ func storeLimitCommandFunc(cmd *cobra.Command, args []string) {
 		if args[0] == "all" {
 			prefix = storesLimitPrefix
 			if rate > maxStoreLimit {
-				cmd.Printf("rate should be less than %.1f for all\n", maxStoreLimit)
+				cmd.Printf("rate should less than %f for all\n", maxStoreLimit)
 				return
 			}
 		} else {
@@ -596,7 +644,7 @@ func storeLimitCommandFunc(cmd *cobra.Command, args []string) {
 				return
 			}
 			if rate > maxStoreLimit {
-				cmd.Printf("rate should be less than %.1f for all\n", maxStoreLimit)
+				cmd.Printf("rate should less than %f for all\n", maxStoreLimit)
 				return
 			}
 			postInput["rate"] = rate

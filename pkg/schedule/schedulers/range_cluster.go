@@ -16,7 +16,6 @@ package schedulers
 
 import (
 	"github.com/docker/go-units"
-
 	"github.com/tikv/pd/pkg/core"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 )

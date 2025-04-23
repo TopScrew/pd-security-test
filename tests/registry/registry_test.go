@@ -21,19 +21,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/interop/grpc_testing"
-
 	"github.com/pingcap/failpoint"
-
+	"github.com/stretchr/testify/require"
 	bs "github.com/tikv/pd/pkg/basicserver"
 	"github.com/tikv/pd/pkg/mcs/registry"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/tests"
+	"go.uber.org/goleak"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/interop/grpc_testing"
 )
 
 func TestMain(m *testing.M) {

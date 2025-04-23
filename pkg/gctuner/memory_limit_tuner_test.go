@@ -20,10 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/failpoint"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/memory"
 )
 

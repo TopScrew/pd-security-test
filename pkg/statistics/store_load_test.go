@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/statistics/utils"
 )

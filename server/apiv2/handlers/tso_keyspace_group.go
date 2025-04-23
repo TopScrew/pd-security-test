@@ -20,9 +20,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
 	"github.com/pingcap/errors"
-
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/slice"

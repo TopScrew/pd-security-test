@@ -16,7 +16,6 @@ package placement
 
 import (
 	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/utils/syncutil"

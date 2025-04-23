@@ -18,7 +18,6 @@ import (
 	"math/rand"
 
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"

@@ -14,10 +14,7 @@
 
 package server
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
 	// ServerMaxProcsGauge records the maxprocs.
@@ -49,9 +46,6 @@ var (
 )
 
 func init() {
-	prometheus.DefaultRegisterer.Unregister(collectors.NewGoCollector())
-	prometheus.MustRegister(collectors.NewGoCollector(collectors.WithGoCollectorRuntimeMetrics(collectors.MetricsGC, collectors.MetricsMemory, collectors.MetricsScheduler)))
-
 	prometheus.MustRegister(ServerMaxProcsGauge)
 	prometheus.MustRegister(ServerMemoryLimit)
 	prometheus.MustRegister(ServerInfoGauge)

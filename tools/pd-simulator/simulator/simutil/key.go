@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/pingcap/errors"
-
 	"github.com/tikv/pd/pkg/codec"
 )
 

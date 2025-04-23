@@ -21,11 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core"
 )
 

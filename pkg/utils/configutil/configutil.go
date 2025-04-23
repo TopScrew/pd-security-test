@@ -21,10 +21,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/spf13/pflag"
-
 	"github.com/pingcap/errors"
-
+	"github.com/spf13/pflag"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
 	"github.com/tikv/pd/pkg/utils/logutil"

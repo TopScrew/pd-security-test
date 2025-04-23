@@ -16,11 +16,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,10 +28,6 @@ import (
 	"time"
 
 	grpcprometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/spf13/cobra"
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/diagnosticspb"
@@ -39,7 +35,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/schedulingpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/sysutil"
-
+	"github.com/spf13/cobra"
 	bs "github.com/tikv/pd/pkg/basicserver"
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
@@ -66,6 +62,8 @@ import (
 	"github.com/tikv/pd/pkg/utils/memberutil"
 	"github.com/tikv/pd/pkg/utils/metricutil"
 	"github.com/tikv/pd/pkg/versioninfo"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 var _ bs.Server = (*Server)(nil)
@@ -110,7 +108,7 @@ type Server struct {
 	hbStreams *hbstream.HeartbeatStreams
 	storage   *endpoint.StorageEndpoint
 
-	// for watching the PD meta info updates that are related to the scheduling.
+	// for watching the PD API server meta info updates that are related to the scheduling.
 	configWatcher *config.Watcher
 	ruleWatcher   *rule.Watcher
 	metaWatcher   *meta.Watcher
@@ -169,10 +167,10 @@ func (s *Server) startServerLoop() {
 	s.serverLoopCtx, s.serverLoopCancel = context.WithCancel(s.Context())
 	s.serverLoopWg.Add(2)
 	go s.primaryElectionLoop()
-	go s.updatePDMemberLoop()
+	go s.updateAPIServerMemberLoop()
 }
 
-func (s *Server) updatePDMemberLoop() {
+func (s *Server) updateAPIServerMemberLoop() {
 	defer logutil.LogPanic()
 	defer s.serverLoopWg.Done()
 
@@ -202,12 +200,12 @@ func (s *Server) updatePDMemberLoop() {
 		}
 		for _, ep := range members.Members {
 			if len(ep.GetClientURLs()) == 0 { // This member is not started yet.
-				log.Info("member is not started yet", zap.String("member-id", strconv.FormatUint(ep.GetID(), 16)), errs.ZapError(err))
+				log.Info("member is not started yet", zap.String("member-id", fmt.Sprintf("%x", ep.GetID())), errs.ZapError(err))
 				continue
 			}
 			status, err := s.GetClient().Status(ctx, ep.ClientURLs[0])
 			if err != nil {
-				log.Info("failed to get status of member", zap.String("member-id", strconv.FormatUint(ep.ID, 16)), zap.String("endpoint", ep.ClientURLs[0]), errs.ZapError(err))
+				log.Info("failed to get status of member", zap.String("member-id", fmt.Sprintf("%x", ep.ID)), zap.String("endpoint", ep.ClientURLs[0]), errs.ZapError(err))
 				continue
 			}
 			if status.Leader == ep.ID {
@@ -220,9 +218,9 @@ func (s *Server) updatePDMemberLoop() {
 					// double check
 					break
 				}
-				if s.cluster.SwitchPDLeader(pdpb.NewPDClient(cc)) {
+				if s.cluster.SwitchAPIServerLeader(pdpb.NewPDClient(cc)) {
 					if status.Leader != curLeader {
-						log.Info("switch leader", zap.String("leader-id", strconv.FormatUint(ep.ID, 16)), zap.String("endpoint", ep.ClientURLs[0]))
+						log.Info("switch leader", zap.String("leader-id", fmt.Sprintf("%x", ep.ID)), zap.String("endpoint", ep.ClientURLs[0]))
 					}
 					curLeader = ep.ID
 					break
@@ -256,7 +254,7 @@ func (s *Server) primaryElectionLoop() {
 		}
 
 		// To make sure the expected primary(if existed) and new primary are on the same server.
-		expectedPrimary := utils.GetExpectedPrimaryFlag(s.GetClient(), &s.participant.MsParam)
+		expectedPrimary := utils.GetExpectedPrimaryFlag(s.GetClient(), s.participant.GetLeaderPath())
 		// skip campaign the primary if the expected primary is not empty and not equal to the current memberValue.
 		// expected primary ONLY SET BY `{service}/primary/transfer` API.
 		if len(expectedPrimary) > 0 && !strings.Contains(s.participant.MemberValue(), expectedPrimary) {
@@ -315,9 +313,7 @@ func (s *Server) campaignLeader() {
 	// check expected primary and watch the primary.
 	exitPrimary := make(chan struct{})
 	lease, err := utils.KeepExpectedPrimaryAlive(ctx, s.GetClient(), exitPrimary,
-		s.cfg.LeaderLease, &keypath.MsParam{
-			ServiceName: constant.SchedulingServiceName,
-		}, s.participant.MemberValue())
+		s.cfg.LeaderLease, s.participant.GetLeaderPath(), s.participant.MemberValue(), constant.SchedulingServiceName)
 	if err != nil {
 		log.Error("prepare scheduling primary watch error", errs.ZapError(err))
 		return
@@ -456,15 +452,13 @@ func (s *Server) startServer() (err error) {
 	uniqueName := s.cfg.GetAdvertiseListenAddr()
 	uniqueID := memberutil.GenerateUniqueID(uniqueName)
 	log.Info("joining primary election", zap.String("participant-name", uniqueName), zap.Uint64("participant-id", uniqueID))
-	s.participant = member.NewParticipant(s.GetClient(), keypath.MsParam{
-		ServiceName: constant.SchedulingServiceName,
-	})
+	s.participant = member.NewParticipant(s.GetClient(), constant.SchedulingServiceName)
 	p := &schedulingpb.Participant{
 		Name:       uniqueName,
 		Id:         uniqueID, // id is unique among all participants
 		ListenUrls: []string{s.cfg.GetAdvertiseListenAddr()},
 	}
-	s.participant.InitInfo(p, "primary election")
+	s.participant.InitInfo(p, keypath.SchedulingSvcRootPath(), constant.PrimaryKey, "primary election")
 
 	s.service = &Service{Server: s}
 	s.AddServiceReadyCallback(s.startCluster)

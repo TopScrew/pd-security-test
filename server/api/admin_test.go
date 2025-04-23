@@ -20,15 +20,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/replication"
 	"github.com/tikv/pd/pkg/utils/apiutil"
@@ -121,7 +118,7 @@ func (suite *adminTestSuite) TestDropRegions() {
 			peers = append(peers, peer)
 		}
 		// initialize region's epoch to (100, 100).
-		region := cluster.GetRegionByKey([]byte(strconv.FormatUint(i, 10))).Clone(
+		region := cluster.GetRegionByKey([]byte(fmt.Sprintf("%d", i))).Clone(
 			core.SetPeers(peers),
 			core.SetRegionConfVer(100),
 			core.SetRegionVersion(100),
@@ -144,7 +141,7 @@ func (suite *adminTestSuite) TestDropRegions() {
 	}
 
 	for i := range n {
-		region := cluster.GetRegionByKey([]byte(strconv.FormatUint(i, 10)))
+		region := cluster.GetRegionByKey([]byte(fmt.Sprintf("%d", i)))
 
 		re.Equal(uint64(100), region.GetRegionEpoch().ConfVer)
 		re.Equal(uint64(100), region.GetRegionEpoch().Version)
@@ -165,7 +162,7 @@ func (suite *adminTestSuite) TestDropRegions() {
 	}
 
 	for i := range n {
-		region := cluster.GetRegionByKey([]byte(strconv.FormatUint(i, 10)))
+		region := cluster.GetRegionByKey([]byte(fmt.Sprintf("%d", i)))
 
 		re.Equal(uint64(50), region.GetRegionEpoch().ConfVer)
 		re.Equal(uint64(50), region.GetRegionEpoch().Version)
@@ -192,7 +189,7 @@ func (suite *adminTestSuite) TestResetTS() {
 	args := make(map[string]any)
 	t1 := makeTS(time.Hour)
 	url := fmt.Sprintf("%s/admin/reset-ts", suite.urlPrefix)
-	args["tso"] = strconv.FormatUint(t1, 10)
+	args["tso"] = fmt.Sprintf("%d", t1)
 	values, err := json.Marshal(args)
 	re.NoError(err)
 	tu.Eventually(re, func() bool {
@@ -215,7 +212,7 @@ func (suite *adminTestSuite) TestResetTS() {
 	})
 	re.NoError(err)
 	t2 := makeTS(32 * time.Hour)
-	args["tso"] = strconv.FormatUint(t2, 10)
+	args["tso"] = fmt.Sprintf("%d", t2)
 	values, err = json.Marshal(args)
 	re.NoError(err)
 	err = tu.CheckPostJSON(testDialClient, url, values,
@@ -224,7 +221,7 @@ func (suite *adminTestSuite) TestResetTS() {
 	re.NoError(err)
 
 	t3 := makeTS(-2 * time.Hour)
-	args["tso"] = strconv.FormatUint(t3, 10)
+	args["tso"] = fmt.Sprintf("%d", t3)
 	values, err = json.Marshal(args)
 	re.NoError(err)
 	err = tu.CheckPostJSON(testDialClient, url, values,
@@ -249,7 +246,7 @@ func (suite *adminTestSuite) TestResetTS() {
 	re.NoError(err)
 
 	t4 := makeTS(32 * time.Hour)
-	args["tso"] = strconv.FormatUint(t4, 10)
+	args["tso"] = fmt.Sprintf("%d", t4)
 	args["force-use-larger"] = "xxx"
 	values, err = json.Marshal(args)
 	re.NoError(err)
@@ -321,13 +318,13 @@ func (suite *adminTestSuite) TestRecoverAllocID() {
 		tu.StatusOK(re)))
 	re.NoError(tu.CheckPostJSON(testDialClient, url, []byte(`{"id": "1000000"}`),
 		tu.StatusOK(re)))
-	id, _, err2 := suite.svr.GetAllocator().Alloc(1)
+	id, err2 := suite.svr.GetAllocator().Alloc()
 	re.NoError(err2)
 	re.Equal(uint64(1000001), id)
 	// recover alloc id again
 	re.NoError(tu.CheckPostJSON(testDialClient, url, []byte(`{"id": "99000000"}`),
 		tu.StatusOK(re)))
-	id, _, err2 = suite.svr.GetAllocator().Alloc(1)
+	id, err2 = suite.svr.GetAllocator().Alloc()
 	re.NoError(err2)
 	re.Equal(uint64(99000001), id)
 	// unmark

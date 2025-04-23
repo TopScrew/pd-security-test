@@ -26,10 +26,9 @@ import (
 	"strconv"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // CPUQuotaStatus presents the status of how CPU quota is used
@@ -286,7 +285,7 @@ func getCgroupDetails(mountInfoPath string, cRoot string, controller string) (mo
 		return []string{mountPointVer2}, []int{2}, nil
 	}
 
-	return nil, nil, errors.New("failed to detect cgroup root mount and version")
+	return nil, nil, fmt.Errorf("failed to detect cgroup root mount and version")
 }
 
 func cgroupFileToUint64(filepath, desc string) (res uint64, err error) {

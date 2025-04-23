@@ -20,11 +20,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
 )
 
 type operatorHandler struct {

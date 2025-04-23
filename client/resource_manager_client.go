@@ -19,16 +19,12 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pingcap/log"
-
-	"github.com/tikv/pd/client/constants"
 	"github.com/tikv/pd/client/errs"
-	"github.com/tikv/pd/client/opt"
+	"go.uber.org/zap"
 )
 
 type actionType int
@@ -55,7 +51,7 @@ type ResourceManagerClient interface {
 	DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error)
 	LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error)
 	AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error)
-	Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error)
+	Watch(ctx context.Context, key []byte, opts ...OpOption) (chan []*meta_storagepb.Event, error)
 }
 
 // GetResourceGroupOp represents available options when getting resource group.
@@ -72,17 +68,24 @@ func WithRUStats(op *GetResourceGroupOp) {
 }
 
 // resourceManagerClient gets the ResourceManager client of current PD leader.
-func (c *innerClient) resourceManagerClient() (rmpb.ResourceManagerClient, error) {
-	cc, err := c.getOrCreateGRPCConn()
+func (c *client) resourceManagerClient() (rmpb.ResourceManagerClient, error) {
+	cc, err := c.pdSvcDiscovery.GetOrCreateGRPCConn(c.GetLeaderURL())
 	if err != nil {
 		return nil, err
 	}
 	return rmpb.NewResourceManagerClient(cc), nil
 }
 
+// gRPCErrorHandler is used to handle the gRPC error returned by the resource manager service.
+func (c *client) gRPCErrorHandler(err error) {
+	if errs.IsLeaderChange(err) {
+		c.pdSvcDiscovery.ScheduleCheckMemberChanged()
+	}
+}
+
 // ListResourceGroups loads and returns all metadata of resource groups.
 func (c *client) ListResourceGroups(ctx context.Context, ops ...GetResourceGroupOption) ([]*rmpb.ResourceGroup, error) {
-	cc, err := c.inner.resourceManagerClient()
+	cc, err := c.resourceManagerClient()
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +98,7 @@ func (c *client) ListResourceGroups(ctx context.Context, ops ...GetResourceGroup
 	}
 	resp, err := cc.ListResourceGroups(ctx, req)
 	if err != nil {
-		c.inner.gRPCErrorHandler(err)
+		c.gRPCErrorHandler(err)
 		return nil, errs.ErrClientListResourceGroup.FastGenByArgs(err.Error())
 	}
 	resErr := resp.GetError()
@@ -107,7 +110,7 @@ func (c *client) ListResourceGroups(ctx context.Context, ops ...GetResourceGroup
 
 // GetResourceGroup implements the ResourceManagerClient interface.
 func (c *client) GetResourceGroup(ctx context.Context, resourceGroupName string, ops ...GetResourceGroupOption) (*rmpb.ResourceGroup, error) {
-	cc, err := c.inner.resourceManagerClient()
+	cc, err := c.resourceManagerClient()
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +124,7 @@ func (c *client) GetResourceGroup(ctx context.Context, resourceGroupName string,
 	}
 	resp, err := cc.GetResourceGroup(ctx, req)
 	if err != nil {
-		c.inner.gRPCErrorHandler(err)
+		c.gRPCErrorHandler(err)
 		return nil, &errs.ErrClientGetResourceGroup{ResourceGroupName: resourceGroupName, Cause: err.Error()}
 	}
 	resErr := resp.GetError()
@@ -142,7 +145,7 @@ func (c *client) ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.Resour
 }
 
 func (c *client) putResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup, typ actionType) (string, error) {
-	cc, err := c.inner.resourceManagerClient()
+	cc, err := c.resourceManagerClient()
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +160,7 @@ func (c *client) putResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceG
 		resp, err = cc.ModifyResourceGroup(ctx, req)
 	}
 	if err != nil {
-		c.inner.gRPCErrorHandler(err)
+		c.gRPCErrorHandler(err)
 		return "", err
 	}
 	resErr := resp.GetError()
@@ -169,7 +172,7 @@ func (c *client) putResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceG
 
 // DeleteResourceGroup implements the ResourceManagerClient interface.
 func (c *client) DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error) {
-	cc, err := c.inner.resourceManagerClient()
+	cc, err := c.resourceManagerClient()
 	if err != nil {
 		return "", err
 	}
@@ -178,7 +181,7 @@ func (c *client) DeleteResourceGroup(ctx context.Context, resourceGroupName stri
 	}
 	resp, err := cc.DeleteResourceGroup(ctx, req)
 	if err != nil {
-		c.inner.gRPCErrorHandler(err)
+		c.gRPCErrorHandler(err)
 		return "", err
 	}
 	resErr := resp.GetError()
@@ -190,7 +193,7 @@ func (c *client) DeleteResourceGroup(ctx context.Context, resourceGroupName stri
 
 // LoadResourceGroups implements the ResourceManagerClient interface.
 func (c *client) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
-	resp, err := c.Get(ctx, GroupSettingsPathPrefixBytes, opt.WithPrefix())
+	resp, err := c.Get(ctx, GroupSettingsPathPrefixBytes, WithPrefix())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -213,10 +216,10 @@ func (c *client) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBuc
 	req := &tokenRequest{
 		done:       make(chan error, 1),
 		requestCtx: ctx,
-		clientCtx:  c.inner.ctx,
+		clientCtx:  c.ctx,
 		Request:    request,
 	}
-	c.inner.tokenDispatcher.tokenBatchController.tokenRequestCh <- req
+	c.tokenDispatcher.tokenBatchController.tokenRequestCh <- req
 	grantedTokens, err := req.wait()
 	if err != nil {
 		return nil, err
@@ -276,7 +279,7 @@ func (cc *resourceManagerConnectionContext) reset() {
 	}
 }
 
-func (c *innerClient) createTokenDispatcher() {
+func (c *client) createTokenDispatcher() {
 	dispatcherCtx, dispatcherCancel := context.WithCancel(c.ctx)
 	dispatcher := &tokenDispatcher{
 		dispatcherCancel: dispatcherCancel,
@@ -288,7 +291,7 @@ func (c *innerClient) createTokenDispatcher() {
 	c.tokenDispatcher = dispatcher
 }
 
-func (c *innerClient) handleResourceTokenDispatcher(dispatcherCtx context.Context, tbc *tokenBatchController) {
+func (c *client) handleResourceTokenDispatcher(dispatcherCtx context.Context, tbc *tokenBatchController) {
 	defer func() {
 		log.Info("[resource manager] exit resource token dispatcher")
 		c.wg.Done()
@@ -331,7 +334,7 @@ func (c *innerClient) handleResourceTokenDispatcher(dispatcherCtx context.Contex
 		// If the stream is still nil, return an error.
 		if stream == nil {
 			firstRequest.done <- errors.Errorf("failed to get the stream connection")
-			c.serviceDiscovery.ScheduleCheckMemberChanged()
+			c.pdSvcDiscovery.ScheduleCheckMemberChanged()
 			connection.reset()
 			continue
 		}
@@ -343,14 +346,14 @@ func (c *innerClient) handleResourceTokenDispatcher(dispatcherCtx context.Contex
 		default:
 		}
 		if err = c.processTokenRequests(stream, firstRequest); err != nil {
-			c.serviceDiscovery.ScheduleCheckMemberChanged()
+			c.pdSvcDiscovery.ScheduleCheckMemberChanged()
 			connection.reset()
 			log.Info("[resource_manager] token request error", zap.Error(err))
 		}
 	}
 }
 
-func (c *innerClient) processTokenRequests(stream rmpb.ResourceManager_AcquireTokenBucketsClient, t *tokenRequest) error {
+func (c *client) processTokenRequests(stream rmpb.ResourceManager_AcquireTokenBucketsClient, t *tokenRequest) error {
 	req := t.Request
 	if err := stream.Send(req); err != nil {
 		err = errors.WithStack(err)
@@ -372,14 +375,14 @@ func (c *innerClient) processTokenRequests(stream rmpb.ResourceManager_AcquireTo
 	return nil
 }
 
-func (c *innerClient) tryResourceManagerConnect(ctx context.Context, connection *resourceManagerConnectionContext) error {
+func (c *client) tryResourceManagerConnect(ctx context.Context, connection *resourceManagerConnectionContext) error {
 	var (
 		err    error
 		stream rmpb.ResourceManager_AcquireTokenBucketsClient
 	)
-	ticker := time.NewTicker(constants.RetryInterval)
+	ticker := time.NewTicker(retryInterval)
 	defer ticker.Stop()
-	for range constants.MaxRetryTimes {
+	for range maxRetryTimes {
 		cc, err := c.resourceManagerClient()
 		if err != nil {
 			continue

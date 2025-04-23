@@ -22,7 +22,7 @@ const (
 	defaultEnableGRPCRateLimitMiddleware = true
 )
 
-// ServiceMiddlewareConfig is the configuration for PD middleware.
+// ServiceMiddlewareConfig is the configuration for PD Service middleware.
 type ServiceMiddlewareConfig struct {
 	AuditConfig         `json:"audit"`
 	RateLimitConfig     `json:"rate-limit"`

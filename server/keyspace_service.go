@@ -16,18 +16,17 @@ package server
 
 import (
 	"context"
+	"path"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"go.etcd.io/etcd/api/v3/mvccpb"
-	clientv3 "go.etcd.io/etcd/client/v3"
-
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
-	"github.com/tikv/pd/pkg/errs"
+	"github.com/tikv/pd/pkg/keyspace"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // KeyspaceServer wraps GrpcServer to provide keyspace service.
@@ -38,9 +37,9 @@ type KeyspaceServer struct {
 // getErrorHeader returns corresponding ResponseHeader based on err.
 func getErrorHeader(err error) *pdpb.ResponseHeader {
 	switch err {
-	case errs.ErrKeyspaceExists:
+	case keyspace.ErrKeyspaceExists:
 		return wrapErrorToHeader(pdpb.ErrorType_DUPLICATED_ENTRY, err.Error())
-	case errs.ErrKeyspaceNotFound:
+	case keyspace.ErrKeyspaceNotFound:
 		return wrapErrorToHeader(pdpb.ErrorType_ENTRY_NOT_FOUND, err.Error())
 	default:
 		return wrapErrorToHeader(pdpb.ErrorType_UNKNOWN, err.Error())
@@ -75,7 +74,7 @@ func (s *KeyspaceServer) WatchKeyspaces(request *keyspacepb.WatchKeyspacesReques
 	}
 	ctx, cancel := context.WithCancel(s.Context())
 	defer cancel()
-	startKey := keypath.KeyspaceMetaPrefix()
+	startKey := path.Join(s.rootPath, keypath.KeyspaceMetaPrefix()) + "/"
 
 	keyspaces := make([]*keyspacepb.KeyspaceMeta, 0)
 	putFn := func(kv *mvccpb.KeyValue) error {

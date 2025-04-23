@@ -21,10 +21,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/failpoint"
-
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"

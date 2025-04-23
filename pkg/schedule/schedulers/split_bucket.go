@@ -22,11 +22,8 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/errs"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/operator"
@@ -35,6 +32,7 @@ import (
 	"github.com/tikv/pd/pkg/statistics/buckets"
 	"github.com/tikv/pd/pkg/utils/reflectutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"github.com/unrolled/render"
 )
 
 const (
@@ -181,7 +179,7 @@ func (s *splitBucketScheduler) IsScheduleAllowed(cluster sche.SchedulerCluster) 
 	}
 	allowed := s.BaseScheduler.OpController.OperatorCount(operator.OpSplit) < s.conf.getSplitLimit()
 	if !allowed {
-		splitBucketSplitLimitCounter.Inc()
+		splitBuckerSplitLimitCounter.Inc()
 		operator.IncOperatorLimitCounter(s.GetType(), operator.OpSplit)
 	}
 	return allowed

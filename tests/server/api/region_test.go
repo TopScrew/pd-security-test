@@ -22,12 +22,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/placement"
 	tu "github.com/tikv/pd/pkg/utils/testutil"
@@ -93,13 +91,13 @@ func (suite *regionTestSuite) TearDownTest() {
 			return true
 		})
 	}
-	suite.env.RunTest(cleanFunc)
+	suite.env.RunTestBasedOnMode(cleanFunc)
 }
 
 func (suite *regionTestSuite) TestSplitRegions() {
 	// use a new environment to avoid affecting other tests
 	env := tests.NewSchedulingTestEnvironment(suite.T())
-	env.RunTest(suite.checkSplitRegions)
+	env.RunTestBasedOnMode(suite.checkSplitRegions)
 	env.Cleanup()
 }
 
@@ -142,7 +140,7 @@ func (suite *regionTestSuite) checkSplitRegions(cluster *tests.TestCluster) {
 func (suite *regionTestSuite) TestAccelerateRegionsScheduleInRange() {
 	re := suite.Require()
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/checker/skipCheckSuspectRanges", "return(true)"))
-	suite.env.RunTest(suite.checkAccelerateRegionsScheduleInRange)
+	suite.env.RunTestBasedOnMode(suite.checkAccelerateRegionsScheduleInRange)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/checker/skipCheckSuspectRanges"))
 }
 
@@ -180,7 +178,7 @@ func (suite *regionTestSuite) checkAccelerateRegionsScheduleInRange(cluster *tes
 func (suite *regionTestSuite) TestAccelerateRegionsScheduleInRanges() {
 	re := suite.Require()
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/schedule/checker/skipCheckSuspectRanges", "return(true)"))
-	suite.env.RunTest(suite.checkAccelerateRegionsScheduleInRanges)
+	suite.env.RunTestBasedOnMode(suite.checkAccelerateRegionsScheduleInRanges)
 	re.NoError(failpoint.Disable("github.com/tikv/pd/pkg/schedule/checker/skipCheckSuspectRanges"))
 }
 
@@ -219,7 +217,7 @@ func (suite *regionTestSuite) checkAccelerateRegionsScheduleInRanges(cluster *te
 func (suite *regionTestSuite) TestScatterRegions() {
 	// use a new environment to avoid affecting other tests
 	env := tests.NewSchedulingTestEnvironment(suite.T())
-	env.RunTest(suite.checkScatterRegions)
+	env.RunTestBasedOnMode(suite.checkScatterRegions)
 	env.Cleanup()
 }
 
@@ -266,7 +264,7 @@ func (suite *regionTestSuite) checkScatterRegions(cluster *tests.TestCluster) {
 }
 
 func (suite *regionTestSuite) TestCheckRegionsReplicated() {
-	suite.env.RunTest(suite.checkRegionsReplicated)
+	suite.env.RunTestBasedOnMode(suite.checkRegionsReplicated)
 }
 
 func (suite *regionTestSuite) checkRegionsReplicated(cluster *tests.TestCluster) {

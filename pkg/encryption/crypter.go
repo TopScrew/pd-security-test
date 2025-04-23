@@ -22,7 +22,6 @@ import (
 	"io"
 
 	"github.com/pingcap/kvproto/pkg/encryptionpb"
-
 	"github.com/tikv/pd/pkg/errs"
 )
 

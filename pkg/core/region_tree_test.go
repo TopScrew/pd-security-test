@@ -19,10 +19,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRegionInfo(t *testing.T) {
@@ -426,7 +425,7 @@ const MaxCount = 1_000_000
 
 func BenchmarkRegionTreeSequentialInsert(b *testing.B) {
 	tree := newRegionTree()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		item := &RegionInfo{meta: &metapb.Region{StartKey: []byte(fmt.Sprintf("%20d", i)), EndKey: []byte(fmt.Sprintf("%20d", i+1))}}
 		updateNewItem(tree, item)
 	}
@@ -435,7 +434,7 @@ func BenchmarkRegionTreeSequentialInsert(b *testing.B) {
 func BenchmarkRegionTreeRandomInsert(b *testing.B) {
 	data := mock1MRegionTree().clearTree().shuffleItems()
 	b.ResetTimer()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		index := i % MaxCount
 		updateNewItem(data.tree, data.items[index])
 	}
@@ -458,7 +457,7 @@ func BenchmarkRegionTreeRandomOverlapsInsert(b *testing.B) {
 		items = append(items, &RegionInfo{meta: &metapb.Region{StartKey: []byte(fmt.Sprintf("%20d", startKey)), EndKey: []byte(fmt.Sprintf("%20d", endKey))}})
 	}
 	b.ResetTimer()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		index := i % MaxCount
 		updateNewItem(tree, items[index])
 	}
@@ -467,7 +466,7 @@ func BenchmarkRegionTreeRandomOverlapsInsert(b *testing.B) {
 func BenchmarkRegionTreeRandomUpdate(b *testing.B) {
 	data := mock1MRegionTree().shuffleItems()
 	b.ResetTimer()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		index := i % MaxCount
 		updateNewItem(data.tree, data.items[index])
 	}
@@ -476,7 +475,7 @@ func BenchmarkRegionTreeRandomUpdate(b *testing.B) {
 func BenchmarkRegionTreeSequentialLookUpRegion(b *testing.B) {
 	data := mock1MRegionTree()
 	b.ResetTimer()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		index := i % MaxCount
 		data.tree.find(&regionItem{RegionInfo: data.items[index]})
 	}
@@ -485,7 +484,7 @@ func BenchmarkRegionTreeSequentialLookUpRegion(b *testing.B) {
 func BenchmarkRegionTreeRandomLookUpRegion(b *testing.B) {
 	data := mock1MRegionTree().shuffleItems()
 	b.ResetTimer()
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		index := i % MaxCount
 		data.tree.find(&regionItem{RegionInfo: data.items[index]})
 	}
@@ -494,7 +493,7 @@ func BenchmarkRegionTreeRandomLookUpRegion(b *testing.B) {
 func BenchmarkRegionTreeScan(b *testing.B) {
 	data := mock1MRegionTree().shuffleItems()
 	b.ResetTimer()
-	for range b.N {
+	for i := 0; i < b.N; i++ {
 		data.tree.scanRanges()
 	}
 }

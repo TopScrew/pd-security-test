@@ -19,14 +19,10 @@ import (
 	"context"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
@@ -37,6 +33,8 @@ import (
 	"github.com/tikv/pd/pkg/schedule/placement"
 	"github.com/tikv/pd/pkg/utils/keyutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
+	"github.com/tikv/pd/pkg/utils/syncutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -80,8 +78,10 @@ type Controller struct {
 
 	// duration is the duration of the last patrol round.
 	// It's exported, so it should be protected by a mutex.
-	duration atomic.Value // Store as time.Duration
-
+	mu struct {
+		syncutil.RWMutex
+		duration time.Duration
+	}
 	// interval is the config interval of patrol regions.
 	// It's used to update the ticker, so we need to
 	// record it to avoid updating the ticker frequently.
@@ -96,7 +96,7 @@ type Controller struct {
 // NewController create a new Controller.
 func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config.CheckerConfigProvider, ruleManager *placement.RuleManager, labeler *labeler.RegionLabeler, opController *operator.Controller) *Controller {
 	pendingProcessedRegions := cache.NewIDTTL(ctx, time.Minute, 3*time.Minute)
-	c := &Controller{
+	return &Controller{
 		ctx:                     ctx,
 		cluster:                 cluster,
 		conf:                    conf,
@@ -114,8 +114,6 @@ func NewController(ctx context.Context, cluster sche.CheckerCluster, conf config
 		interval:                cluster.GetCheckerConfig().GetPatrolRegionInterval(),
 		patrolRegionScanLimit:   calculateScanLimit(cluster),
 	}
-	c.duration.Store(time.Duration(0))
-	return c
 }
 
 // PatrolRegions is used to scan regions.
@@ -212,11 +210,15 @@ func (c *Controller) updatePatrolWorkersIfNeeded() {
 
 // GetPatrolRegionsDuration returns the duration of the last patrol region round.
 func (c *Controller) GetPatrolRegionsDuration() time.Duration {
-	return c.duration.Load().(time.Duration)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.duration
 }
 
 func (c *Controller) setPatrolRegionsDuration(dur time.Duration) {
-	c.duration.Store(dur)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.duration = dur
 }
 
 func (c *Controller) checkRegions(startKey []byte) (key []byte, regions []*core.RegionInfo) {

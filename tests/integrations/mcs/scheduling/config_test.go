@@ -20,11 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-
-	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mcs/scheduling/server/config"
@@ -62,7 +60,7 @@ func (suite *configTestSuite) SetupSuite() {
 	schedulers.Register()
 	var err error
 	suite.ctx, suite.cancel = context.WithCancel(context.Background())
-	suite.cluster, err = tests.NewTestClusterWithKeyspaceGroup(suite.ctx, 1)
+	suite.cluster, err = tests.NewTestAPICluster(suite.ctx, 1)
 	re.NoError(err)
 	err = suite.cluster.RunInitialServers()
 	re.NoError(err)
@@ -132,7 +130,7 @@ func (suite *configTestSuite) TestConfigWatch() {
 	watcher.Close()
 }
 
-// Manually trigger the config persistence in the PD side.
+// Manually trigger the config persistence in the PD API server side.
 func persistConfig(re *require.Assertions, pdLeaderServer *tests.TestServer) {
 	err := pdLeaderServer.GetPersistOptions().Persist(pdLeaderServer.GetServer().GetStorage())
 	re.NoError(err)
@@ -152,19 +150,19 @@ func (suite *configTestSuite) TestSchedulerConfigWatch() {
 	)
 	re.NoError(err)
 	// Get all default scheduler names.
-	var namesFromPDService []string
+	var namesFromAPIServer []string
 	testutil.Eventually(re, func() bool {
-		namesFromPDService, _, _ = suite.pdLeaderServer.GetRaftCluster().GetStorage().LoadAllSchedulerConfigs()
-		return len(namesFromPDService) == len(sc.DefaultSchedulers)
+		namesFromAPIServer, _, _ = suite.pdLeaderServer.GetRaftCluster().GetStorage().LoadAllSchedulerConfigs()
+		return len(namesFromAPIServer) == len(sc.DefaultSchedulers)
 	})
 	// Check all default schedulers' configs.
 	var namesFromSchedulingServer []string
 	testutil.Eventually(re, func() bool {
 		namesFromSchedulingServer, _, err = storage.LoadAllSchedulerConfigs()
 		re.NoError(err)
-		return len(namesFromSchedulingServer) == len(namesFromPDService)
+		return len(namesFromSchedulingServer) == len(namesFromAPIServer)
 	})
-	re.Equal(namesFromPDService, namesFromSchedulingServer)
+	re.Equal(namesFromAPIServer, namesFromSchedulingServer)
 	// Add a new scheduler.
 	api.MustAddScheduler(re, suite.pdLeaderServer.GetAddr(), types.EvictLeaderScheduler.String(), map[string]any{
 		"store_id": 1,

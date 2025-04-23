@@ -18,12 +18,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/unrolled/render"
-	"github.com/urfave/negroni"
-
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/apiutil/serverapi"
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
+	"github.com/urfave/negroni"
 )
 
 const autoScalingPrefix = "/autoscaling"

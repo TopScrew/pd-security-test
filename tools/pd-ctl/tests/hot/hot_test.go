@@ -22,12 +22,10 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/schedule/handler"
 	"github.com/tikv/pd/pkg/statistics"
@@ -73,11 +71,11 @@ func (suite *hotTestSuite) TearDownTest() {
 		}
 		hotStat.HotCache.CleanCache()
 	}
-	suite.env.RunTest(cleanFunc)
+	suite.env.RunTestBasedOnMode(cleanFunc)
 }
 
 func (suite *hotTestSuite) TestHot() {
-	suite.env.RunTest(suite.checkHot)
+	suite.env.RunTestBasedOnMode(suite.checkHot)
 }
 
 func (suite *hotTestSuite) checkHot(cluster *pdTests.TestCluster) {
@@ -247,7 +245,7 @@ func (suite *hotTestSuite) checkHot(cluster *pdTests.TestCluster) {
 }
 
 func (suite *hotTestSuite) TestHotWithStoreID() {
-	suite.env.RunTest(suite.checkHotWithStoreID)
+	suite.env.RunTestBasedOnMode(suite.checkHotWithStoreID)
 }
 
 func (suite *hotTestSuite) checkHotWithStoreID(cluster *pdTests.TestCluster) {
@@ -314,7 +312,7 @@ func (suite *hotTestSuite) checkHotWithStoreID(cluster *pdTests.TestCluster) {
 }
 
 func (suite *hotTestSuite) TestHotWithoutHotPeer() {
-	suite.env.RunTest(suite.checkHotWithoutHotPeer)
+	suite.env.RunTestBasedOnMode(suite.checkHotWithoutHotPeer)
 }
 
 func (suite *hotTestSuite) checkHotWithoutHotPeer(cluster *pdTests.TestCluster) {

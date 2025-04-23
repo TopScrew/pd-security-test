@@ -21,14 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/schedulingpb"
 	"github.com/pingcap/log"
-
 	bs "github.com/tikv/pd/pkg/basicserver"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
@@ -37,6 +33,16 @@ import (
 	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/versioninfo"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// gRPC errors
+var (
+	ErrNotStarted        = status.Errorf(codes.Unavailable, "server not started")
+	ErrClusterMismatched = status.Errorf(codes.Unavailable, "cluster mismatched")
 )
 
 // SetUpRestHandler is a hook to sets up the REST service.
@@ -99,7 +105,7 @@ func (s *heartbeatServer) Send(m core.RegionHeartbeatResponse) error {
 		return errors.WithStack(err)
 	case <-timer.C:
 		atomic.StoreInt32(&s.closed, 1)
-		return errs.ErrSendHeartbeatTimeout
+		return status.Errorf(codes.DeadlineExceeded, "send heartbeat timeout")
 	}
 }
 
@@ -159,7 +165,7 @@ func (s *Service) RegionHeartbeat(stream schedulingpb.Scheduling_RegionHeartbeat
 		region := core.RegionFromHeartbeat(request, 0)
 		err = c.HandleRegionHeartbeat(region)
 		if err != nil {
-			// TODO: if we need to send the error back to PD.
+			// TODO: if we need to send the error back to API server.
 			log.Error("failed handle region heartbeat", zap.Error(err))
 			continue
 		}
@@ -288,57 +294,26 @@ func (s *Service) AskBatchSplit(_ context.Context, request *schedulingpb.AskBatc
 	splitIDs := make([]*pdpb.SplitID, 0, splitCount)
 	recordRegions := make([]uint64, 0, splitCount+1)
 
-	requestIDCount := splitCount * (1 + uint32(len(request.Region.Peers)))
-	id, count, err := c.AllocID(requestIDCount)
-	if err != nil {
-		return nil, err
-	}
+	for i := 0; i < int(splitCount); i++ {
+		newRegionID, err := c.AllocID()
+		if err != nil {
+			return nil, errs.ErrSchedulerNotFound.FastGenByArgs()
+		}
 
-	// If the count is not equal to the requestIDCount, it means that the
-	// PD doesn't support allocating IDs in batch. We need to allocate IDs
-	// for each region.
-	if requestIDCount != count {
-		// use non batch way to split region
-		for range splitCount {
-			newRegionID, _, err := c.AllocID(1)
-			if err != nil {
+		peerIDs := make([]uint64, len(request.Region.Peers))
+		for i := 0; i < len(peerIDs); i++ {
+			if peerIDs[i], err = c.AllocID(); err != nil {
 				return nil, err
 			}
-			peerIDs := make([]uint64, len(request.Region.Peers))
-			for i := 0; i < len(peerIDs); i++ {
-				peerIDs[i], _, err = c.AllocID(1)
-				if err != nil {
-					return nil, err
-				}
-			}
-			recordRegions = append(recordRegions, newRegionID)
-			splitIDs = append(splitIDs, &pdpb.SplitID{
-				NewRegionId: newRegionID,
-				NewPeerIds:  peerIDs,
-			})
-			log.Info("alloc ids for region split", zap.Uint64("region-id", newRegionID), zap.Uint64s("peer-ids", peerIDs))
 		}
-	} else {
-		// use batch way to split region
-		curID := id - uint64(requestIDCount) + 1
-		for range splitCount {
-			newRegionID := curID
-			curID++
 
-			peerIDs := make([]uint64, len(request.Region.Peers))
-			for j := 0; j < len(peerIDs); j++ {
-				peerIDs[j] = curID
-				curID++
-			}
+		recordRegions = append(recordRegions, newRegionID)
+		splitIDs = append(splitIDs, &pdpb.SplitID{
+			NewRegionId: newRegionID,
+			NewPeerIds:  peerIDs,
+		})
 
-			recordRegions = append(recordRegions, newRegionID)
-			splitIDs = append(splitIDs, &pdpb.SplitID{
-				NewRegionId: newRegionID,
-				NewPeerIds:  peerIDs,
-			})
-
-			log.Info("alloc ids for region split", zap.Uint64("region-id", newRegionID), zap.Uint64s("peer-ids", peerIDs))
-		}
+		log.Info("alloc ids for region split", zap.Uint64("region-id", newRegionID), zap.Uint64s("peer-ids", peerIDs))
 	}
 
 	recordRegions = append(recordRegions, reqRegion.GetId())

@@ -19,10 +19,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
@@ -37,7 +35,7 @@ func newTestManager(t *testing.T, enableWitness bool) (endpoint.RuleStorage, *Ru
 	var err error
 	manager := NewRuleManager(context.Background(), store, nil, mockconfig.NewTestOptions())
 	manager.conf.SetEnableWitness(enableWitness)
-	err = manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
+	err = manager.Initialize(3, []string{"zone", "rack", "host"}, "")
 	re.NoError(err)
 	return store, manager
 }
@@ -160,7 +158,7 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	m2 := NewRuleManager(context.Background(), store, nil, nil)
-	err := m2.Initialize(3, []string{"no", "labels"}, "", false)
+	err := m2.Initialize(3, []string{"no", "labels"}, "")
 	re.NoError(err)
 	re.Len(m2.GetAllRules(), 3)
 	re.Equal(m2.GetRule(DefaultGroupID, DefaultRuleID).String(), rules[0].String())
@@ -178,7 +176,7 @@ func TestSetAfterGet(t *testing.T) {
 	manager.SetRule(rule)
 
 	m2 := NewRuleManager(context.Background(), store, nil, nil)
-	err := m2.Initialize(100, []string{}, "", false)
+	err := m2.Initialize(100, []string{}, "")
 	re.NoError(err)
 	rule = m2.GetRule(DefaultGroupID, DefaultRuleID)
 	re.Equal(1, rule.Count)

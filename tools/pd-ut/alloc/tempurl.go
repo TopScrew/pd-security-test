@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/errs"
 )
 

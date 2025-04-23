@@ -61,7 +61,7 @@ type SharedCluster interface {
 	GetBasicCluster() *core.BasicCluster
 	GetSharedConfig() sc.SharedConfigProvider
 	GetRuleManager() *placement.RuleManager
-	AllocID(uint32) (uint64, uint32, error)
+	AllocID() (uint64, error)
 	IsSchedulingHalted() bool
 }
 

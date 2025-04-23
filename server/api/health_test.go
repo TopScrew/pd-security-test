@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/config"
 )
@@ -50,22 +49,22 @@ func TestHealthSlice(t *testing.T) {
 	re := require.New(t)
 	cfgs, svrs, clean := mustNewCluster(re, 3)
 	defer clean()
-	var leader, follower *server.Server
+	var leader, follow *server.Server
 
 	for _, svr := range svrs {
 		if !svr.IsClosed() && svr.GetMember().IsLeader() {
 			leader = svr
 		} else {
-			follower = svr
+			follow = svr
 		}
 	}
 	mustBootstrapCluster(re, leader)
 	addr := leader.GetConfig().ClientUrls + apiPrefix + "/api/v1/health"
-	follower.Close()
+	follow.Close()
 	resp, err := testDialClient.Get(addr)
 	re.NoError(err)
 	defer resp.Body.Close()
 	buf, err := io.ReadAll(resp.Body)
 	re.NoError(err)
-	checkSliceResponse(re, buf, cfgs, follower.GetConfig().Name)
+	checkSliceResponse(re, buf, cfgs, follow.GetConfig().Name)
 }

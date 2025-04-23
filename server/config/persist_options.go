@@ -25,14 +25,10 @@ import (
 	"unsafe"
 
 	"github.com/coreos/go-semver/semver"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -42,6 +38,8 @@ import (
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 )
 
 // PersistOptions wraps all configurations that need to persist to storage and
@@ -55,7 +53,7 @@ type PersistOptions struct {
 	replicationMode atomic.Value
 	labelProperty   atomic.Value
 	keyspace        atomic.Value
-	microservice    atomic.Value
+	microService    atomic.Value
 	storeConfig     atomic.Value
 	clusterVersion  unsafe.Pointer
 }
@@ -69,7 +67,7 @@ func NewPersistOptions(cfg *Config) *PersistOptions {
 	o.replicationMode.Store(&cfg.ReplicationMode)
 	o.labelProperty.Store(cfg.LabelProperty)
 	o.keyspace.Store(&cfg.Keyspace)
-	o.microservice.Store(&cfg.Microservice)
+	o.microService.Store(&cfg.MicroService)
 	// storeConfig will be fetched from TiKV later,
 	// set it to an empty config here first.
 	o.storeConfig.Store(&sc.StoreConfig{})
@@ -138,14 +136,14 @@ func (o *PersistOptions) SetKeyspaceConfig(cfg *KeyspaceConfig) {
 	o.keyspace.Store(cfg)
 }
 
-// GetMicroserviceConfig returns the microservice configuration.
-func (o *PersistOptions) GetMicroserviceConfig() *MicroserviceConfig {
-	return o.microservice.Load().(*MicroserviceConfig)
+// GetMicroServiceConfig returns the micro service configuration.
+func (o *PersistOptions) GetMicroServiceConfig() *MicroServiceConfig {
+	return o.microService.Load().(*MicroServiceConfig)
 }
 
-// SetMicroserviceConfig sets the microservice configuration.
-func (o *PersistOptions) SetMicroserviceConfig(cfg *MicroserviceConfig) {
-	o.microservice.Store(cfg)
+// SetMicroServiceConfig sets the micro service configuration.
+func (o *PersistOptions) SetMicroServiceConfig(cfg *MicroServiceConfig) {
+	o.microService.Store(cfg)
 }
 
 // GetStoreConfig returns the store config.
@@ -791,7 +789,7 @@ func (o *PersistOptions) Persist(storage endpoint.ConfigStorage) error {
 			ReplicationMode: *o.GetReplicationModeConfig(),
 			LabelProperty:   o.GetLabelPropertyConfig(),
 			Keyspace:        *o.GetKeyspaceConfig(),
-			Microservice:    *o.GetMicroserviceConfig(),
+			MicroService:    *o.GetMicroServiceConfig(),
 			ClusterVersion:  *o.GetClusterVersion(),
 		},
 		StoreConfig: *o.GetStoreConfig(),
@@ -824,7 +822,7 @@ func (o *PersistOptions) Reload(storage endpoint.ConfigStorage) error {
 		o.replicationMode.Store(&cfg.ReplicationMode)
 		o.labelProperty.Store(cfg.LabelProperty)
 		o.keyspace.Store(&cfg.Keyspace)
-		o.microservice.Store(&cfg.Microservice)
+		o.microService.Store(&cfg.MicroService)
 		o.storeConfig.Store(&cfg.StoreConfig)
 		o.SetClusterVersion(&cfg.ClusterVersion)
 	}

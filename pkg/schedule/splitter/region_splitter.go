@@ -22,17 +22,15 @@ import (
 	"math"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/filter"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -155,7 +153,7 @@ func (r *RegionSplitter) groupKeysByRegion(keys [][]byte) map[uint64]*regionGrou
 		if bytes.Equal(region.GetStartKey(), key) {
 			continue
 		}
-		log.Debug("found region",
+		log.Info("found region",
 			zap.Uint64("region-id", region.GetID()),
 			logutil.ZapRedactByteString("key", key))
 		_, ok := groups[region.GetID()]

@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-semver/semver"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
 	"github.com/tikv/pd/pkg/schedule/types"
@@ -37,6 +35,12 @@ var schedulerMap sync.Map
 // RegisterScheduler registers the scheduler type.
 func RegisterScheduler(typ types.CheckerSchedulerType) {
 	schedulerMap.Store(typ, struct{}{})
+}
+
+// IsSchedulerRegistered checks if the named scheduler type is registered.
+func IsSchedulerRegistered(typ types.CheckerSchedulerType) bool {
+	_, ok := schedulerMap.Load(typ)
+	return ok
 }
 
 // SchedulerConfigProvider is the interface for scheduler configurations.

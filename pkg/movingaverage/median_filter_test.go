@@ -26,7 +26,7 @@ func BenchmarkMedianFilter(b *testing.B) {
 		mf.Add(n)
 	}
 	b.ResetTimer()
-	for range b.N {
+	for i := 0; i < b.N; i++ {
 		mf.Get()
 	}
 }

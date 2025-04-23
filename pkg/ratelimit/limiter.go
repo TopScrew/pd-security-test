@@ -17,10 +17,9 @@ package ratelimit
 import (
 	"math"
 
-	"golang.org/x/time/rate"
-
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"golang.org/x/time/rate"
 )
 
 // DoneFunc is done function.

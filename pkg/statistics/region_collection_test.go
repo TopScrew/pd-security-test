@@ -18,11 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/mock/mockconfig"
 	"github.com/tikv/pd/pkg/schedule/placement"
@@ -33,7 +31,7 @@ func TestRegionStatistics(t *testing.T) {
 	re := require.New(t)
 	store := storage.NewStorageWithMemoryBackend()
 	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
-	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
+	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "")
 	re.NoError(err)
 	opt := mockconfig.NewTestOptions()
 	opt.SetPlacementRuleEnabled(false)
@@ -122,7 +120,7 @@ func TestRegionStatisticsWithPlacementRule(t *testing.T) {
 	re := require.New(t)
 	store := storage.NewStorageWithMemoryBackend()
 	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
-	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
+	err := manager.Initialize(3, []string{"zone", "rack", "host"}, "")
 	re.NoError(err)
 	opt := mockconfig.NewTestOptions()
 	opt.SetPlacementRuleEnabled(true)
@@ -276,7 +274,7 @@ func BenchmarkObserve(b *testing.B) {
 	// Setup
 	store := storage.NewStorageWithMemoryBackend()
 	manager := placement.NewRuleManager(context.Background(), store, nil, nil)
-	manager.Initialize(3, []string{"zone", "rack", "host"}, "", false)
+	manager.Initialize(3, []string{"zone", "rack", "host"}, "")
 	opt := mockconfig.NewTestOptions()
 	opt.SetPlacementRuleEnabled(false)
 	peers := []*metapb.Peer{
@@ -307,7 +305,7 @@ func BenchmarkObserve(b *testing.B) {
 
 	b.ResetTimer()
 	// Run the Observe function b.N times
-	for i := range b.N {
+	for i := 0; i < b.N; i++ {
 		regionStats.Observe(regions[i%int(regionNum)], stores)
 	}
 }

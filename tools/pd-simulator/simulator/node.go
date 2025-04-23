@@ -22,11 +22,8 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/pkg/utils/syncutil"
@@ -35,6 +32,7 @@ import (
 	sc "github.com/tikv/pd/tools/pd-simulator/simulator/config"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/info"
 	"github.com/tikv/pd/tools/pd-simulator/simulator/simutil"
+	"go.uber.org/zap"
 )
 
 const (

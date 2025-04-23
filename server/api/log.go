@@ -19,12 +19,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/unrolled/render"
-
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
 )
 
 type logHandler struct {

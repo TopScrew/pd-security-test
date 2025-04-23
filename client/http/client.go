@@ -23,15 +23,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-
+	"github.com/prometheus/client_golang/prometheus"
+	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/errs"
-	"github.com/tikv/pd/client/pkg/retry"
-	sd "github.com/tikv/pd/client/servicediscovery"
+	"github.com/tikv/pd/client/retry"
+	"go.uber.org/zap"
 )
 
 const (
@@ -58,7 +56,7 @@ type clientInner struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	sd sd.ServiceDiscovery
+	sd pd.ServiceDiscovery
 
 	// source is used to mark the source of the client creation,
 	// it will also be used in the caller ID of the inner client.
@@ -76,7 +74,7 @@ func newClientInner(ctx context.Context, cancel context.CancelFunc, source strin
 	return &clientInner{ctx: ctx, cancel: cancel, source: source}
 }
 
-func (ci *clientInner) init(sd sd.ServiceDiscovery) {
+func (ci *clientInner) init(sd pd.ServiceDiscovery) {
 	// Init the HTTP client if it's not configured.
 	if ci.cli == nil {
 		ci.cli = &http.Client{Timeout: defaultTimeout}
@@ -245,7 +243,7 @@ func (ci *clientInner) doRequest(
 		if readErr != nil {
 			logFields = append(logFields, zap.NamedError("read-body-error", err))
 		} else {
-			// PD will return a JSON body containing the detailed error message
+			// API server will return a JSON body containing the detailed error message
 			// when the status code is not `http.StatusOK` 200.
 			bs = bytes.TrimSpace(bs)
 			logFields = append(logFields, zap.ByteString("body", bs))
@@ -304,10 +302,10 @@ func WithMetrics(
 	}
 }
 
-// NewClientWithServiceDiscovery creates a PD HTTP client with the given service discovery.
+// NewClientWithServiceDiscovery creates a PD HTTP client with the given PD service discovery.
 func NewClientWithServiceDiscovery(
 	source string,
-	sd sd.ServiceDiscovery,
+	sd pd.ServiceDiscovery,
 	opts ...ClientOption,
 ) Client {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -332,7 +330,7 @@ func NewClient(
 	for _, opt := range opts {
 		opt(c)
 	}
-	sd := sd.NewDefaultServiceDiscovery(ctx, cancel, pdAddrs, c.inner.tlsConf)
+	sd := pd.NewDefaultPDServiceDiscovery(ctx, cancel, pdAddrs, c.inner.tlsConf)
 	if err := sd.Init(); err != nil {
 		log.Error("[pd] init service discovery failed",
 			zap.String("source", source), zap.Strings("pd-addrs", pdAddrs), zap.Error(err))
@@ -420,7 +418,7 @@ func NewHTTPClientWithRequestChecker(checker requestChecker) *http.Client {
 	}
 }
 
-// newClientWithMockServiceDiscovery creates a new PD HTTP client with a mock service discovery.
+// newClientWithMockServiceDiscovery creates a new PD HTTP client with a mock PD service discovery.
 func newClientWithMockServiceDiscovery(
 	source string,
 	pdAddrs []string,
@@ -432,7 +430,7 @@ func newClientWithMockServiceDiscovery(
 	for _, opt := range opts {
 		opt(c)
 	}
-	sd := sd.NewMockServiceDiscovery(pdAddrs, c.inner.tlsConf)
+	sd := pd.NewMockPDServiceDiscovery(pdAddrs, c.inner.tlsConf)
 	if err := sd.Init(); err != nil {
 		log.Error("[pd] init mock service discovery failed",
 			zap.String("source", source), zap.Strings("pd-addrs", pdAddrs), zap.Error(err))

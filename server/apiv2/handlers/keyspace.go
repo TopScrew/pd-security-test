@@ -22,10 +22,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
-
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/keyspace"
 	"github.com/tikv/pd/server"
@@ -300,7 +298,7 @@ func UpdateKeyspaceConfig(c *gin.Context) {
 	// Check if the update is supported.
 	for _, mutation := range mutations {
 		if mutation.Key == keyspace.GCManagementType && mutation.Value == keyspace.KeyspaceLevelGC {
-			err = errs.ErrUnsupportedOperationInKeyspace
+			err = keyspace.ErrUnsupportedOperationInKeyspace
 			c.AbortWithStatusJSON(http.StatusInternalServerError, err.Error())
 			return
 		}

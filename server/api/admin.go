@@ -22,16 +22,14 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
+	"go.uber.org/zap"
 )
 
 type adminHandler struct {
@@ -231,7 +229,7 @@ func (h *adminHandler) recoverAllocID(w http.ResponseWriter, r *http.Request) {
 func (h *adminHandler) deleteRegionCacheInSchedulingServer(id ...uint64) error {
 	addr, ok := h.svr.GetServicePrimaryAddr(h.svr.Context(), constant.SchedulingServiceName)
 	if !ok {
-		return errs.ErrNotFoundSchedulingPrimary.FastGenByArgs()
+		return errs.ErrNotFoundSchedulingAddr.FastGenByArgs()
 	}
 	var idStr string
 	if len(id) > 0 {
@@ -254,5 +252,5 @@ func (h *adminHandler) deleteRegionCacheInSchedulingServer(id ...uint64) error {
 }
 
 func buildMsg(err error) string {
-	return fmt.Sprintf("This operation was executed in PD but needs to be re-executed on scheduling server due to the following error: %s", err.Error())
+	return fmt.Sprintf("This operation was executed in API server but needs to be re-executed on scheduling server due to the following error: %s", err.Error())
 }

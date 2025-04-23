@@ -27,13 +27,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/coreos/go-semver/semver"
-	"github.com/spf13/pflag"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-
+	"github.com/spf13/pflag"
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/core/storelimit"
@@ -46,6 +43,7 @@ import (
 	"github.com/tikv/pd/pkg/utils/grpcutil"
 	"github.com/tikv/pd/pkg/utils/metricutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -243,7 +241,7 @@ func NewPersistConfig(cfg *Config, ttl *cache.TTLString) *PersistConfig {
 	o.SetClusterVersion(&cfg.ClusterVersion)
 	o.schedule.Store(&cfg.Schedule)
 	o.replication.Store(&cfg.Replication)
-	// storeConfig will be fetched from TiKV by PD,
+	// storeConfig will be fetched from TiKV by PD API server,
 	// so we just set an empty value here first.
 	o.storeConfig.Store(&sc.StoreConfig{})
 	o.ttl = ttl
@@ -748,11 +746,11 @@ func (o *PersistConfig) IsRaftKV2() bool {
 // TODO: implement the following methods
 
 // AddSchedulerCfg adds the scheduler configurations.
-// This method is a no-op since we only use configurations derived from one-way synchronization from PD now.
+// This method is a no-op since we only use configurations derived from one-way synchronization from API server now.
 func (*PersistConfig) AddSchedulerCfg(types.CheckerSchedulerType, []string) {}
 
 // RemoveSchedulerCfg removes the scheduler configurations.
-// This method is a no-op since we only use configurations derived from one-way synchronization from PD now.
+// This method is a no-op since we only use configurations derived from one-way synchronization from API server now.
 func (*PersistConfig) RemoveSchedulerCfg(types.CheckerSchedulerType) {}
 
 // CheckLabelProperty checks if the label property is satisfied.

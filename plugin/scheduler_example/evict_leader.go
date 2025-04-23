@@ -20,11 +20,8 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
 	"github.com/tikv/pd/pkg/errs"
@@ -37,6 +34,7 @@ import (
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/apiutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"github.com/unrolled/render"
 )
 
 const (
@@ -187,7 +185,7 @@ func (s *evictLeaderScheduler) PrepareConfig(cluster sche.SchedulerCluster) erro
 	defer s.conf.mu.RUnlock()
 	var res error
 	for id := range s.conf.StoreIDWitRanges {
-		if err := cluster.PauseLeaderTransfer(id, constant.In); err != nil {
+		if err := cluster.PauseLeaderTransfer(id); err != nil {
 			res = err
 		}
 	}
@@ -199,7 +197,7 @@ func (s *evictLeaderScheduler) CleanConfig(cluster sche.SchedulerCluster) {
 	s.conf.mu.RLock()
 	defer s.conf.mu.RUnlock()
 	for id := range s.conf.StoreIDWitRanges {
-		cluster.ResumeLeaderTransfer(id, constant.In)
+		cluster.ResumeLeaderTransfer(id)
 	}
 }
 
@@ -260,7 +258,7 @@ func (handler *evictLeaderHandler) updateConfig(w http.ResponseWriter, r *http.R
 	if ok {
 		id = (uint64)(idFloat)
 		if _, exists = handler.config.StoreIDWitRanges[id]; !exists {
-			if err := handler.config.cluster.PauseLeaderTransfer(id, constant.In); err != nil {
+			if err := handler.config.cluster.PauseLeaderTransfer(id); err != nil {
 				handler.rd.JSON(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -278,7 +276,7 @@ func (handler *evictLeaderHandler) updateConfig(w http.ResponseWriter, r *http.R
 	err := handler.config.BuildWithArgs(args)
 	if err != nil {
 		handler.config.mu.Lock()
-		handler.config.cluster.ResumeLeaderTransfer(id, constant.In)
+		handler.config.cluster.ResumeLeaderTransfer(id)
 		handler.config.mu.Unlock()
 		handler.rd.JSON(w, http.StatusBadRequest, err.Error())
 		return
@@ -287,7 +285,7 @@ func (handler *evictLeaderHandler) updateConfig(w http.ResponseWriter, r *http.R
 	if err != nil {
 		handler.config.mu.Lock()
 		delete(handler.config.StoreIDWitRanges, id)
-		handler.config.cluster.ResumeLeaderTransfer(id, constant.In)
+		handler.config.cluster.ResumeLeaderTransfer(id)
 		handler.config.mu.Unlock()
 		handler.rd.JSON(w, http.StatusInternalServerError, err.Error())
 		return
@@ -316,11 +314,11 @@ func (handler *evictLeaderHandler) deleteConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 	delete(handler.config.StoreIDWitRanges, id)
-	handler.config.cluster.ResumeLeaderTransfer(id, constant.In)
+	handler.config.cluster.ResumeLeaderTransfer(id)
 
 	if err := handler.config.Persist(); err != nil {
 		handler.config.StoreIDWitRanges[id] = ranges
-		_ = handler.config.cluster.PauseLeaderTransfer(id, constant.In)
+		_ = handler.config.cluster.PauseLeaderTransfer(id)
 		handler.rd.JSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}

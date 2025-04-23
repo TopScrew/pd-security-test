@@ -22,18 +22,16 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/spf13/pflag"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-
+	"github.com/spf13/pflag"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	"github.com/tikv/pd/pkg/tso"
 	"github.com/tikv/pd/pkg/utils/configutil"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
 	"github.com/tikv/pd/pkg/utils/metricutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -66,7 +64,10 @@ type Config struct {
 	// the primary/leader again. Etcd only supports seconds TTL, so here is second too.
 	LeaderLease int64 `toml:"lease" json:"lease"`
 
-	// Deprecated
+	// EnableLocalTSO is used to enable the Local TSO Allocator feature,
+	// which allows the PD server to generate Local TSO for certain DC-level transactions.
+	// To make this feature meaningful, user has to set the "zone" label for the PD server
+	// to indicate which DC this PD belongs to.
 	EnableLocalTSO bool `toml:"enable-local-tso" json:"enable-local-tso"`
 
 	// TSOSaveInterval is the interval to save timestamp.
@@ -124,6 +125,11 @@ func (c *Config) GetAdvertiseListenAddr() string {
 // GetLeaderLease returns the leader lease.
 func (c *Config) GetLeaderLease() int64 {
 	return c.LeaderLease
+}
+
+// IsLocalTSOEnabled returns if the local TSO is enabled.
+func (c *Config) IsLocalTSOEnabled() bool {
+	return c.EnableLocalTSO
 }
 
 // GetTSOUpdatePhysicalInterval returns TSO update physical interval.

@@ -18,11 +18,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/syndtr/goleveldb/leveldb"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-
+	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage/endpoint"

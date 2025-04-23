@@ -20,31 +20,33 @@ import (
 	"sync"
 
 	"github.com/gogo/protobuf/proto"
-	"go.etcd.io/etcd/api/v3/mvccpb"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/statistics"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/keypath"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 )
 
-// Watcher is used to watch the PD for any meta changes.
+// Watcher is used to watch the PD API server for any meta changes.
 type Watcher struct {
 	wg     sync.WaitGroup
 	ctx    context.Context
 	cancel context.CancelFunc
+	// storePathPrefix is the path of the store in etcd:
+	//  - Key: /pd/{cluster_id}/raft/s/
+	//  - Value: meta store proto.
+	storePathPrefix string
 
 	etcdClient   *clientv3.Client
 	basicCluster *core.BasicCluster
 	storeWatcher *etcdutil.LoopWatcher
 }
 
-// NewWatcher creates a new watcher to watch the meta change from PD.
+// NewWatcher creates a new watcher to watch the meta change from PD API server.
 func NewWatcher(
 	ctx context.Context,
 	etcdClient *clientv3.Client,
@@ -52,10 +54,11 @@ func NewWatcher(
 ) (*Watcher, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &Watcher{
-		ctx:          ctx,
-		cancel:       cancel,
-		etcdClient:   etcdClient,
-		basicCluster: basicCluster,
+		ctx:             ctx,
+		cancel:          cancel,
+		storePathPrefix: keypath.StorePathPrefix(),
+		etcdClient:      etcdClient,
+		basicCluster:    basicCluster,
 	}
 	err := w.initializeStoreWatcher()
 	if err != nil {
@@ -103,9 +106,7 @@ func (w *Watcher) initializeStoreWatcher() error {
 	w.storeWatcher = etcdutil.NewLoopWatcher(
 		w.ctx, &w.wg,
 		w.etcdClient,
-		"scheduling-store-watcher",
-		// Watch meta store proto
-		keypath.StorePathPrefix(),
+		"scheduling-store-watcher", w.storePathPrefix,
 		func([]*clientv3.Event) error { return nil },
 		putFn, deleteFn,
 		func([]*clientv3.Event) error { return nil },

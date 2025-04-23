@@ -16,7 +16,6 @@ package cases
 
 import (
 	"github.com/pingcap/kvproto/pkg/metapb"
-
 	pdHttp "github.com/tikv/pd/client/http"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/utils/typeutil"

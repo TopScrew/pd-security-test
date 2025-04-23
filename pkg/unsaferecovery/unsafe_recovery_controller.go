@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,13 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/btree"
 	"github.com/tikv/pd/pkg/codec"
 	"github.com/tikv/pd/pkg/core"
@@ -38,6 +35,7 @@ import (
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
+	"go.uber.org/zap"
 )
 
 // stage is the stage of unsafe recovery.
@@ -110,7 +108,7 @@ type cluster interface {
 	core.StoreSetInformer
 
 	ResetRegionCache()
-	AllocID(uint32) (uint64, uint32, error)
+	AllocID() (uint64, error)
 	BuryStore(storeID uint64, forceBury bool) error
 	GetSchedulerConfig() sc.SchedulerConfigProvider
 }
@@ -515,7 +513,7 @@ func (u *Controller) changeStage(stage stage) {
 			count := 0
 			for store := range u.failedStores {
 				count += 1
-				stores += strconv.FormatUint(store, 10)
+				stores += fmt.Sprintf("%d", store)
 				if count != len(u.failedStores) {
 					stores += ", "
 				}
@@ -587,7 +585,7 @@ func (u *Controller) getForceLeaderPlanDigest() map[string][]string {
 		if forceLeaders != nil {
 			regions := ""
 			for i, regionID := range forceLeaders.GetEnterForceLeaders() {
-				regions += strconv.FormatUint(regionID, 10)
+				regions += fmt.Sprintf("%d", regionID)
 				if i != len(forceLeaders.GetEnterForceLeaders())-1 {
 					regions += ", "
 				}
@@ -1151,11 +1149,11 @@ func (u *Controller) generateCreateEmptyRegionPlan(newestRegionTree *regionTree,
 	hasPlan := false
 
 	createRegion := func(startKey, endKey []byte, storeID uint64) (*metapb.Region, error) {
-		regionID, _, err := u.cluster.AllocID(1)
+		regionID, err := u.cluster.AllocID()
 		if err != nil {
 			return nil, err
 		}
-		peerID, _, err := u.cluster.AllocID(1)
+		peerID, err := u.cluster.AllocID()
 		if err != nil {
 			return nil, err
 		}

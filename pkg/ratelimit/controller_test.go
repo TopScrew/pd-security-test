@@ -21,9 +21,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/time/rate"
-
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"golang.org/x/time/rate"
 )
 
 type changeAndResult struct {

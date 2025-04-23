@@ -20,12 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/schedule/checker"
@@ -42,6 +39,7 @@ import (
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -389,7 +387,7 @@ func (c *Coordinator) LoadPlugin(pluginPath string, ch chan string) {
 		return
 	}
 	log.Info("create scheduler", zap.String("scheduler-name", s.GetName()))
-	// TODO: handle the plugin in microservice env.
+	// TODO: handle the plugin in API service mode.
 	if err = c.schedulers.AddScheduler(s); err != nil {
 		log.Error("can't add scheduler", zap.String("scheduler-name", s.GetName()), errs.ZapError(err))
 		return

@@ -18,9 +18,8 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/unrolled/render"
-
 	"github.com/tikv/pd/server"
+	"github.com/unrolled/render"
 )
 
 type diagnosticHandler struct {

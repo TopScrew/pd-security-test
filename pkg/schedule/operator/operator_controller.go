@@ -15,19 +15,15 @@
 package operator
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/cache"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/core/constant"
@@ -37,6 +33,7 @@ import (
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/versioninfo"
+	"go.uber.org/zap"
 )
 
 // The source of dispatched region.
@@ -829,25 +826,6 @@ func (oc *Controller) GetHistory(start time.Time) []OpHistory {
 	return history
 }
 
-// OpInfluenceOption is used to filter the region.
-// returns true if the region meets the condition, it will ignore this region in the influence calculation.
-// returns false if the region does not meet the condition, it will calculate the influence of this region.
-type OpInfluenceOption func(region *core.RegionInfo) bool
-
-// WithRangeOption returns an OpInfluenceOption that filters the region by the key ranges.
-func WithRangeOption(ranges []core.KeyRange) OpInfluenceOption {
-	return func(region *core.RegionInfo) bool {
-		for _, r := range ranges {
-			// the start key of the region must greater than the given range start key.
-			// the end key of the region must less than the given range end key.
-			if bytes.Compare(region.GetStartKey(), r.StartKey) < 0 || bytes.Compare(r.EndKey, region.GetEndKey()) < 0 {
-				return false
-			}
-		}
-		return true
-	}
-}
-
 // OperatorCount gets the count of operators filtered by kind.
 // kind only has one OpKind.
 func (oc *Controller) OperatorCount(kind OpKind) uint64 {
@@ -855,7 +833,7 @@ func (oc *Controller) OperatorCount(kind OpKind) uint64 {
 }
 
 // GetOpInfluence gets OpInfluence.
-func (oc *Controller) GetOpInfluence(cluster *core.BasicCluster, ops ...OpInfluenceOption) OpInfluence {
+func (oc *Controller) GetOpInfluence(cluster *core.BasicCluster) OpInfluence {
 	influence := OpInfluence{
 		StoresInfluence: make(map[uint64]*StoreInfluence),
 	}
@@ -864,11 +842,6 @@ func (oc *Controller) GetOpInfluence(cluster *core.BasicCluster, ops ...OpInflue
 			op := value.(*Operator)
 			if !op.CheckTimeout() && !op.CheckSuccess() {
 				region := cluster.GetRegion(op.RegionID())
-				for _, opt := range ops {
-					if !opt(region) {
-						return true
-					}
-				}
 				if region != nil {
 					op.UnfinishedInfluence(influence, region)
 				}

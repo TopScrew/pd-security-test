@@ -16,15 +16,13 @@ package ratelimit
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
-
-	"github.com/pingcap/log"
-
-	"github.com/tikv/pd/pkg/errs"
 )
 
 // RegionHeartbeatStageName is the name of the stage of the region heartbeat.
@@ -58,6 +56,9 @@ type Task struct {
 	// retained indicates whether the task should be dropped if the task queue exceeds maxPendingDuration.
 	retained bool
 }
+
+// ErrMaxWaitingTasksExceeded is returned when the number of waiting tasks exceeds the maximum.
+var ErrMaxWaitingTasksExceeded = errors.New("max waiting tasks exceeded")
 
 type taskID struct {
 	id   uint64
@@ -215,12 +216,12 @@ func (cr *ConcurrentRunner) RunTask(id uint64, name string, f func(context.Conte
 			maxWait := time.Since(cr.pendingTasks[0].submittedAt)
 			if maxWait > cr.maxPendingDuration {
 				runnerFailedTasks.WithLabelValues(cr.name, task.name).Inc()
-				return errs.ErrMaxWaitingTasksExceeded
+				return ErrMaxWaitingTasksExceeded
 			}
 		}
 		if pendingTaskNum > maxPendingTaskNum {
 			runnerFailedTasks.WithLabelValues(cr.name, task.name).Inc()
-			return errs.ErrMaxWaitingTasksExceeded
+			return ErrMaxWaitingTasksExceeded
 		}
 	}
 	cr.pendingTasks = append(cr.pendingTasks, task)

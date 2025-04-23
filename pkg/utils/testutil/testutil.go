@@ -21,12 +21,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/log"
 )
 
 const (

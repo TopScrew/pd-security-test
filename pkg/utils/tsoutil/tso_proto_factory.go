@@ -17,12 +17,10 @@ package tsoutil
 import (
 	"context"
 
-	"google.golang.org/grpc"
-
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/tsopb"
-
 	"github.com/tikv/pd/pkg/utils/grpcutil"
+	"google.golang.org/grpc"
 )
 
 // ProtoFactory is the abstract factory for creating tso related data structures defined in the grpc service
@@ -58,7 +56,7 @@ func (*PDProtoFactory) createForwardStream(ctx context.Context, clientConn *grpc
 
 type stream interface {
 	// process sends a request and receives the response through the stream
-	process(clusterID uint64, count, keyspaceID, keyspaceGroupID uint32) (tsoResp, error)
+	process(clusterID uint64, count, keyspaceID, keyspaceGroupID uint32, dcLocation string) (response, error)
 }
 
 type tsoStream struct {
@@ -66,14 +64,15 @@ type tsoStream struct {
 }
 
 // process sends a request and receives the response through the stream
-func (s *tsoStream) process(clusterID uint64, count, keyspaceID, keyspaceGroupID uint32) (tsoResp, error) {
+func (s *tsoStream) process(clusterID uint64, count, keyspaceID, keyspaceGroupID uint32, dcLocation string) (response, error) {
 	req := &tsopb.TsoRequest{
 		Header: &tsopb.RequestHeader{
 			ClusterId:       clusterID,
 			KeyspaceId:      keyspaceID,
 			KeyspaceGroupId: keyspaceGroupID,
 		},
-		Count: count,
+		Count:      count,
+		DcLocation: dcLocation,
 	}
 	if err := s.stream.Send(req); err != nil {
 		return nil, err
@@ -90,12 +89,13 @@ type pdStream struct {
 }
 
 // process sends a request and receives the response through the stream
-func (s *pdStream) process(clusterID uint64, count, _, _ uint32) (tsoResp, error) {
+func (s *pdStream) process(clusterID uint64, count, _, _ uint32, dcLocation string) (response, error) {
 	req := &pdpb.TsoRequest{
 		Header: &pdpb.RequestHeader{
 			ClusterId: clusterID,
 		},
-		Count: count,
+		Count:      count,
+		DcLocation: dcLocation,
 	}
 	if err := s.stream.Send(req); err != nil {
 		return nil, err

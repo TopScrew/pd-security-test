@@ -20,10 +20,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/suite"
-
 	"github.com/pingcap/failpoint"
-
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/pd/pkg/ratelimit"
 	tu "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/server"

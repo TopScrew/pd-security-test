@@ -21,12 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shirou/gopsutil/v3/mem"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/log"
-
+	"github.com/shirou/gopsutil/v3/mem"
 	bs "github.com/tikv/pd/pkg/basicserver"
+	"go.uber.org/zap"
 )
 
 const (

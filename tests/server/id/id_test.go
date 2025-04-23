@@ -19,15 +19,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
-
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/tests"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
@@ -51,7 +49,7 @@ func TestID(t *testing.T) {
 	leaderServer := cluster.GetLeaderServer()
 	var last uint64
 	for range allocStep {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last)
 		last = id
@@ -68,7 +66,7 @@ func TestID(t *testing.T) {
 			defer wg.Done()
 
 			for range 200 {
-				id, _, err := leaderServer.GetAllocator().Alloc(1)
+				id, err := leaderServer.GetAllocator().Alloc()
 				re.NoError(err)
 				m.Lock()
 				_, ok := ids[id]
@@ -127,7 +125,7 @@ func TestMonotonicID(t *testing.T) {
 	leaderServer := cluster.GetLeaderServer()
 	var last1 uint64
 	for range 10 {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last1)
 		last1 = id
@@ -138,7 +136,7 @@ func TestMonotonicID(t *testing.T) {
 	leaderServer = cluster.GetLeaderServer()
 	var last2 uint64
 	for range 10 {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last2)
 		last2 = id
@@ -147,12 +145,12 @@ func TestMonotonicID(t *testing.T) {
 	re.NoError(err)
 	re.NotEmpty(cluster.WaitLeader())
 	leaderServer = cluster.GetLeaderServer()
-	id, _, err := leaderServer.GetAllocator().Alloc(1)
+	id, err := leaderServer.GetAllocator().Alloc()
 	re.NoError(err)
 	re.Greater(id, last2)
 	var last3 uint64
 	for range 1000 {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last3)
 		last3 = id
@@ -174,7 +172,7 @@ func TestPDRestart(t *testing.T) {
 
 	var last uint64
 	for range 10 {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last)
 		last = id
@@ -185,59 +183,9 @@ func TestPDRestart(t *testing.T) {
 	re.NotEmpty(cluster.WaitLeader())
 
 	for range 10 {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
+		id, err := leaderServer.GetAllocator().Alloc()
 		re.NoError(err)
 		re.Greater(id, last)
 		last = id
 	}
-}
-
-func TestBatchAllocID(t *testing.T) {
-	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cluster, err := tests.NewTestCluster(ctx, 1)
-	re.NoError(err)
-	defer cluster.Destroy()
-
-	err = cluster.RunInitialServers()
-	re.NoError(err)
-	re.NotEmpty(cluster.WaitLeader())
-
-	leaderServer := cluster.GetLeaderServer()
-	var last uint64
-	for range allocStep {
-		id, _, err := leaderServer.GetAllocator().Alloc(1)
-		re.NoError(err)
-		re.Greater(id, last)
-		last = id
-	}
-
-	var wg sync.WaitGroup
-
-	var m syncutil.Mutex
-	ids := make(map[uint64]struct{})
-
-	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			for range 200 {
-				id, count, err := leaderServer.GetAllocator().Alloc(10)
-				curID := id - uint64(count)
-				re.NoError(err)
-				m.Lock()
-				for range count {
-					_, ok := ids[curID]
-					ids[curID] = struct{}{}
-					curID++
-					re.False(ok, curID)
-				}
-				m.Unlock()
-			}
-		}()
-	}
-
-	wg.Wait()
 }

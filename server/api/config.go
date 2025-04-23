@@ -24,13 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/unrolled/render"
-
 	"github.com/pingcap/errcode"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/utils/constant"
 	sc "github.com/tikv/pd/pkg/schedule/config"
@@ -40,6 +36,7 @@ import (
 	"github.com/tikv/pd/pkg/utils/reflectutil"
 	"github.com/tikv/pd/server"
 	"github.com/tikv/pd/server/config"
+	"github.com/unrolled/render"
 )
 
 // This line is to ensure the package `sc` could always be imported so that
@@ -66,7 +63,7 @@ func newConfHandler(svr *server.Server, rd *render.Render) *confHandler {
 func (h *confHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := h.svr.GetConfig()
 	if h.svr.IsServiceIndependent(constant.SchedulingServiceName) &&
-		r.Header.Get(apiutil.XForbiddenForwardToMicroserviceHeader) != "true" {
+		r.Header.Get(apiutil.XForbiddenForwardToMicroServiceHeader) != "true" {
 		schedulingServerConfig, err := h.getSchedulingServerConfig()
 		if err != nil {
 			h.rd.JSON(w, http.StatusInternalServerError, err.Error())
@@ -189,7 +186,7 @@ func (h *confHandler) updateConfig(cfg *config.Config, key string, value any) er
 	case "keyspace":
 		return h.updateKeyspaceConfig(cfg, kp[len(kp)-1], value)
 	case "micro-service":
-		return h.updateMicroserviceConfig(cfg, kp[len(kp)-1], value)
+		return h.updateMicroServiceConfig(cfg, kp[len(kp)-1], value)
 	}
 	return errors.Errorf("config prefix %s not found", kp[0])
 }
@@ -210,8 +207,8 @@ func (h *confHandler) updateKeyspaceConfig(config *config.Config, key string, va
 	return err
 }
 
-func (h *confHandler) updateMicroserviceConfig(config *config.Config, key string, value any) error {
-	updated, found, err := jsonutil.AddKeyValue(&config.Microservice, key, value)
+func (h *confHandler) updateMicroServiceConfig(config *config.Config, key string, value any) error {
+	updated, found, err := jsonutil.AddKeyValue(&config.MicroService, key, value)
 	if err != nil {
 		return err
 	}
@@ -221,7 +218,7 @@ func (h *confHandler) updateMicroserviceConfig(config *config.Config, key string
 	}
 
 	if updated {
-		err = h.svr.SetMicroserviceConfig(config.Microservice)
+		err = h.svr.SetMicroServiceConfig(config.MicroService)
 	}
 	return err
 }
@@ -340,7 +337,7 @@ func getConfigMap(cfg map[string]any, key []string, value any) map[string]any {
 // @Router   /config/schedule [get]
 func (h *confHandler) GetScheduleConfig(w http.ResponseWriter, r *http.Request) {
 	if h.svr.IsServiceIndependent(constant.SchedulingServiceName) &&
-		r.Header.Get(apiutil.XForbiddenForwardToMicroserviceHeader) != "true" {
+		r.Header.Get(apiutil.XForbiddenForwardToMicroServiceHeader) != "true" {
 		cfg, err := h.getSchedulingServerConfig()
 		if err != nil {
 			h.rd.JSON(w, http.StatusInternalServerError, err.Error())
@@ -412,12 +409,8 @@ func (h *confHandler) SetScheduleConfig(w http.ResponseWriter, r *http.Request) 
 // @Success  200  {object}  sc.ReplicationConfig
 // @Router   /config/replicate [get]
 func (h *confHandler) GetReplicationConfig(w http.ResponseWriter, r *http.Request) {
-	failpoint.Inject("getReplicationConfigFailed", func(v failpoint.Value) {
-		code := v.(int)
-		h.rd.JSON(w, code, "get config failed")
-	})
 	if h.svr.IsServiceIndependent(constant.SchedulingServiceName) &&
-		r.Header.Get(apiutil.XForbiddenForwardToMicroserviceHeader) != "true" {
+		r.Header.Get(apiutil.XForbiddenForwardToMicroServiceHeader) != "true" {
 		cfg, err := h.getSchedulingServerConfig()
 		if err != nil {
 			h.rd.JSON(w, http.StatusInternalServerError, err.Error())
@@ -571,7 +564,7 @@ func (h *confHandler) GetPDServerConfig(w http.ResponseWriter, _ *http.Request) 
 func (h *confHandler) getSchedulingServerConfig() (*config.Config, error) {
 	addr, ok := h.svr.GetServicePrimaryAddr(h.svr.Context(), constant.SchedulingServiceName)
 	if !ok {
-		return nil, errs.ErrNotFoundSchedulingPrimary.FastGenByArgs()
+		return nil, errs.ErrNotFoundSchedulingAddr.FastGenByArgs()
 	}
 	url := fmt.Sprintf("%s/scheduling/api/v1/config", addr)
 	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)

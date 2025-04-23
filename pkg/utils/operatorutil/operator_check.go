@@ -16,7 +16,6 @@ package operatorutil
 
 import (
 	"github.com/stretchr/testify/require"
-
 	"github.com/tikv/pd/pkg/schedule/operator"
 )
 
@@ -34,15 +33,6 @@ func CheckTransferLeaderFrom(re *require.Assertions, op *operator.Operator, kind
 	re.NotNil(op)
 	re.Equal(1, op.Len())
 	re.Equal(sourceID, op.Step(0).(operator.TransferLeader).FromStore)
-	kind |= operator.OpLeader
-	re.Equal(kind, op.Kind()&kind)
-}
-
-// CheckMultiSourceTransferLeader checks if the operator is to transfer leader out of one of the source stores.
-func CheckMultiSourceTransferLeader(re *require.Assertions, op *operator.Operator, kind operator.OpKind, sourceIDs []uint64) {
-	re.NotNil(op)
-	re.Equal(1, op.Len())
-	re.Contains(sourceIDs, op.Step(0).(operator.TransferLeader).FromStore)
 	kind |= operator.OpLeader
 	re.Equal(kind, op.Kind()&kind)
 }

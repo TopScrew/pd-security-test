@@ -19,11 +19,9 @@ import (
 	"strings"
 
 	"github.com/coreos/go-semver/semver"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/log"
-
 	"github.com/tikv/pd/pkg/errs"
+	"go.uber.org/zap"
 )
 
 // Status is the status of PD server.

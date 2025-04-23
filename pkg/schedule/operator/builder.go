@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
-
 	"github.com/tikv/pd/pkg/core"
 	sche "github.com/tikv/pd/pkg/schedule/core"
 	"github.com/tikv/pd/pkg/schedule/filter"
@@ -490,7 +489,7 @@ func (b *Builder) prepareBuild() (string, error) {
 		if o == nil || (!b.useJointConsensus && !core.IsLearner(o) && core.IsLearner(n)) {
 			if n.GetId() == 0 {
 				// Allocate peer ID if need.
-				id, _, err := b.AllocID(1)
+				id, err := b.AllocID()
 				if err != nil {
 					return "", err
 				}

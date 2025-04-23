@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
 	pdTests "github.com/tikv/pd/tests"
 	ctl "github.com/tikv/pd/tools/pd-ctl/pdctl"
 	"github.com/tikv/pd/tools/pd-ctl/tests"
@@ -39,6 +38,7 @@ func TestRemoveFailedStores(t *testing.T) {
 	re.NoError(err)
 	pdAddr := cluster.GetConfig().GetClientURL()
 	cmd := ctl.GetRootCmd()
+	defer cluster.Destroy()
 
 	args := []string{"-u", pdAddr, "unsafe", "remove-failed-stores", "1,2,3"}
 	_, err = tests.ExecuteCommand(cmd, args...)

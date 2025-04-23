@@ -16,7 +16,6 @@ package schedulers
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/tikv/pd/pkg/schedule/types"
 )
 
@@ -222,16 +221,11 @@ func transferWitnessLeaderCounterWithEvent(event string) prometheus.Counter {
 	return schedulerCounter.WithLabelValues(types.TransferWitnessLeaderScheduler.String(), event)
 }
 
-func balanceRangeCounterWithEvent(event string) prometheus.Counter {
-	return schedulerCounter.WithLabelValues(types.BalanceRangeScheduler.String(), event)
-}
-
 // WithLabelValues is a heavy operation, define variable to avoid call it every time.
 var (
 	balanceLeaderScheduleCounter         = balanceLeaderCounterWithEvent("schedule")
 	balanceLeaderNoLeaderRegionCounter   = balanceLeaderCounterWithEvent("no-leader-region")
 	balanceLeaderRegionHotCounter        = balanceLeaderCounterWithEvent("region-hot")
-	balanceLeaderNoSourceStoreCounter    = balanceLeaderCounterWithEvent("no-source-store")
 	balanceLeaderNoTargetStoreCounter    = balanceLeaderCounterWithEvent("no-target-store")
 	balanceLeaderNoFollowerRegionCounter = balanceLeaderCounterWithEvent("no-follower-region")
 	balanceLeaderSkipCounter             = balanceLeaderCounterWithEvent("skip")
@@ -333,7 +327,7 @@ var (
 	shuffleRegionNoSourceStoreCounter      = shuffleRegionCounterWithEvent("no-source-store")
 
 	splitBucketDisableCounter            = splitBucketCounterWithEvent("bucket-disable")
-	splitBucketSplitLimitCounter         = splitBucketCounterWithEvent("split-limit")
+	splitBuckerSplitLimitCounter         = splitBucketCounterWithEvent("split-limit")
 	splitBucketScheduleCounter           = splitBucketCounterWithEvent("schedule")
 	splitBucketNoRegionCounter           = splitBucketCounterWithEvent("no-region")
 	splitBucketRegionTooSmallCounter     = splitBucketCounterWithEvent("region-too-small")
@@ -346,14 +340,4 @@ var (
 	transferWitnessLeaderCounter              = transferWitnessLeaderCounterWithEvent("schedule")
 	transferWitnessLeaderNewOperatorCounter   = transferWitnessLeaderCounterWithEvent("new-operator")
 	transferWitnessLeaderNoTargetStoreCounter = transferWitnessLeaderCounterWithEvent("no-target-store")
-
-	balanceRangeCounter              = balanceRangeCounterWithEvent("schedule")
-	balanceRangeNewOperatorCounter   = balanceRangeCounterWithEvent("new-operator")
-	balanceRangeExpiredCounter       = balanceRangeCounterWithEvent("expired")
-	balanceRangeNoRegionCounter      = balanceRangeCounterWithEvent("no-region")
-	balanceRangeHotCounter           = balanceRangeCounterWithEvent("region-hot")
-	balanceRangeNoLeaderCounter      = balanceRangeCounterWithEvent("no-leader")
-	balanceRangeCreateOpFailCounter  = balanceRangeCounterWithEvent("create-operator-fail")
-	balanceRangeNoReplacementCounter = balanceRangeCounterWithEvent("no-replacement")
-	balanceRangeNoJobCounter         = balanceRangeCounterWithEvent("no-job")
 )

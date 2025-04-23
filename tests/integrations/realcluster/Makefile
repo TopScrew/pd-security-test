@@ -31,14 +31,10 @@ tidy:
 check: tiup test
 
 tiup:
-	@echo "==> Checking tiup installation"
-	@if ! which tiup > /dev/null 2>&1; then \
-		echo "Installing tiup..."; \
-		curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh; \
-	else \
-		echo "tiup already installed"; \
-	fi
-	@echo "tiup version: $$(tiup --version)"
+	# if tiup binary not exist, download it
+	if ! which tiup > /dev/null 2>&1; then \
+        curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh; \
+    fi
 
 deploy: kill_cluster deploy_only
 
@@ -62,16 +58,14 @@ kill_cluster:
 	fi
 
 test:
-	CGO_ENABLED=1 go test ./... -v -tags deadlock -race -cover -timeout 20m || (\
-	echo "The following is pd-0 log" ; \
+	CGO_ENABLED=1 go test ./... -v -tags deadlock -race -cover || (\
+	echo "follow is pd-0 log\n" ; \
 	cat ~/.tiup/data/pd_real_cluster_test/pd-0/pd.log ; \
-	echo "The following is pd-1 log" ; \
+	echo "follow is pd-1 log\n" ; \
 	cat ~/.tiup/data/pd_real_cluster_test/pd-1/pd.log ; \
-	echo "The following is pd-2 log" ; \
+	echo "follow is pd-2 log\n" ; \
 	cat ~/.tiup/data/pd_real_cluster_test/pd-2/pd.log ; \
 	exit 1)
 
 install-tools:
 	cd $(ROOT_PATH) && $(MAKE) install-tools
-
-.PHONY: tidy static check tiup deploy deploy_only kill_cluster test install-tools

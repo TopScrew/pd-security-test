@@ -37,7 +37,7 @@ type realClusterSuite struct {
 }
 
 var (
-	playgroundLogDir = "/tmp/real_cluster/playground"
+	playgroundLogDir = filepath.Join("tmp", "real_cluster", "playground")
 	tiupBin          = os.Getenv("HOME") + "/.tiup/bin/tiup"
 )
 

@@ -474,22 +474,14 @@ func (td *tsoDispatcher) connectionCtxsUpdater() {
 	)
 
 	log.Info("[tso] start tso connection contexts updater", zap.String("dc-location", dc))
-	setNewUpdateTicker := func(interval time.Duration) {
+	setNewUpdateTicker := func(ticker *time.Ticker) {
 		if updateTicker.C != nil {
 			updateTicker.Stop()
 		}
-		if interval == 0 {
-			updateTicker = &time.Ticker{}
-		} else {
-			updateTicker = time.NewTicker(interval)
-		}
-	}
-	// If the TSO Follower Proxy is enabled, set the update interval to the member update interval.
-	if option.getEnableTSOFollowerProxy() {
-		setNewUpdateTicker(memberUpdateInterval)
+		updateTicker = ticker
 	}
 	// Set to nil before returning to ensure that the existing ticker can be GC.
-	defer setNewUpdateTicker(0)
+	defer setNewUpdateTicker(nil)
 
 	for {
 		provider.updateConnectionCtxs(ctx, dc, connectionCtxs)
@@ -509,11 +501,13 @@ func (td *tsoDispatcher) connectionCtxsUpdater() {
 			if enableTSOFollowerProxy && updateTicker.C == nil {
 				// Because the TSO Follower Proxy is enabled,
 				// the periodic check needs to be performed.
-				setNewUpdateTicker(memberUpdateInterval)
+				setNewUpdateTicker(time.NewTicker(memberUpdateInterval))
 			} else if !enableTSOFollowerProxy && updateTicker.C != nil {
 				// Because the TSO Follower Proxy is disabled,
 				// the periodic check needs to be turned off.
-				setNewUpdateTicker(0)
+				setNewUpdateTicker(&time.Ticker{})
+			} else {
+				continue
 			}
 		case <-updateTicker.C:
 			// Triggered periodically when the TSO Follower Proxy is enabled.

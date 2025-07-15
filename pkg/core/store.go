@@ -417,7 +417,12 @@ func (s *StoreInfo) regionScoreV2(delta int64, lowSpaceRatio float64) float64 {
 	}
 
 	if s.GetRegionSize() != 0 {
-		U += U * (float64(delta)) / float64(s.GetRegionSize())
+		U1 := U + U*(float64(delta))/float64(s.GetRegionSize())
+		// The used size of the store can't be increase/decrease too more than before to avoid too large score change.
+		if U1 < 2*U && U1 > U*0.5 {
+			U = U1
+		}
+		// The available size of the store can't reach out the capacity
 		if A1 := C - U - diff; A1 > 0 && A1 < C {
 			A = A1
 		}
@@ -757,14 +762,17 @@ func (s *StoresInfo) GetNonWitnessVoterStores(region *RegionInfo) []*StoreInfo {
 /* Stores write operations */
 
 // PutStore sets a StoreInfo with storeID.
-func (s *StoresInfo) PutStore(store *StoreInfo) {
+func (s *StoresInfo) PutStore(store *StoreInfo, opts ...StoreCreateOption) {
 	s.Lock()
 	defer s.Unlock()
-	s.putStoreLocked(store)
+	s.putStoreLocked(store, opts...)
 }
 
 // putStoreLocked sets a StoreInfo with storeID.
-func (s *StoresInfo) putStoreLocked(store *StoreInfo) {
+func (s *StoresInfo) putStoreLocked(store *StoreInfo, opts ...StoreCreateOption) {
+	if len(opts) > 0 {
+		store = s.stores[store.GetID()].Clone(opts...)
+	}
 	s.stores[store.GetID()] = store
 }
 
@@ -779,6 +787,7 @@ func (s *StoresInfo) ResetStores() {
 func (s *StoresInfo) PauseLeaderTransfer(storeID uint64) error {
 	s.Lock()
 	defer s.Unlock()
+	log.Info("pause store leader transfer", zap.Uint64("store-id", storeID))
 	store, ok := s.stores[storeID]
 	if !ok {
 		return errs.ErrStoreNotFound.FastGenByArgs(storeID)
@@ -795,6 +804,7 @@ func (s *StoresInfo) PauseLeaderTransfer(storeID uint64) error {
 func (s *StoresInfo) ResumeLeaderTransfer(storeID uint64) {
 	s.Lock()
 	defer s.Unlock()
+	log.Info("resume store leader transfer", zap.Uint64("store-id", storeID))
 	store, ok := s.stores[storeID]
 	if !ok {
 		log.Warn("try to clean a store's pause state, but it is not found. It may be cleanup",

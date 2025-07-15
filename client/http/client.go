@@ -218,7 +218,7 @@ func (ci *clientInner) doRequest(
 	resp, err := ci.cli.Do(req)
 	if err != nil {
 		ci.reqCounter(name, networkErrorStatus)
-		log.Error("[pd] do http request failed", append(logFields, zap.Error(err))...)
+		log.Warn("[pd] do http request failed", append(logFields, zap.Error(err))...)
 		return -1, errors.Trace(err)
 	}
 	ci.execDuration(name, time.Since(start))
@@ -249,7 +249,7 @@ func (ci *clientInner) doRequest(
 			logFields = append(logFields, zap.ByteString("body", bs))
 		}
 
-		log.Error("[pd] request failed with a non-200 status", logFields...)
+		log.Warn("[pd] request failed with a non-200 status", logFields...)
 		return resp.StatusCode, errors.Errorf("request pd http api failed with status: '%s', body: '%s'", resp.Status, bs)
 	}
 

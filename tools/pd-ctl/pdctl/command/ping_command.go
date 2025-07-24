@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-)
 
-const pingPrefix = "pd/api/v1/ping"
+	"github.com/tikv/pd/pkg/utils/apiutil"
+)
 
 // NewPingCommand return a ping subcommand of rootCmd
 func NewPingCommand() *cobra.Command {
@@ -33,9 +33,9 @@ func NewPingCommand() *cobra.Command {
 	return m
 }
 
-func showPingCommandFunc(cmd *cobra.Command, _ []string) {
+func showPingCommandFunc(cmd *cobra.Command, args []string) {
 	start := time.Now()
-	_, err := doRequest(cmd, pingPrefix, http.MethodGet, http.Header{})
+	_, err := doRequest(cmd, pingPrefix, http.MethodGet, http.Header{apiutil.PDAllowFollowerHandleHeader: {"true"}})
 	if err != nil {
 		cmd.Println(err)
 		return

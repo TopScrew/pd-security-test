@@ -100,7 +100,7 @@ func (s *ReplicaStrategy) SelectStoreToFix(coLocationStores []*core.StoreInfo, o
 		return 0, false
 	}
 	// trick to avoid creating a slice with `old` removed.
-	swapStoreToFirst(coLocationStores, old)
+	s.swapStoreToFirst(coLocationStores, old)
 	// If the coLocationStores only has one store, no need to remove.
 	// Otherwise, the other stores will be filtered.
 	if len(coLocationStores) > 1 {
@@ -116,7 +116,7 @@ func (s *ReplicaStrategy) SelectStoreToImprove(coLocationStores []*core.StoreInf
 		return 0, false
 	}
 	// trick to avoid creating a slice with `old` removed.
-	swapStoreToFirst(coLocationStores, old)
+	s.swapStoreToFirst(coLocationStores, old)
 	oldStore := s.cluster.GetStore(old)
 	if oldStore == nil {
 		return 0, false
@@ -130,7 +130,7 @@ func (s *ReplicaStrategy) SelectStoreToImprove(coLocationStores []*core.StoreInf
 	return s.SelectStoreToAdd(coLocationStores[1:], filters...)
 }
 
-func swapStoreToFirst(stores []*core.StoreInfo, id uint64) {
+func (s *ReplicaStrategy) swapStoreToFirst(stores []*core.StoreInfo, id uint64) {
 	for i, s := range stores {
 		if s.GetID() == id {
 			stores[0], stores[i] = stores[i], stores[0]

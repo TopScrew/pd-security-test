@@ -27,8 +27,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
-	"github.com/tikv/pd/pkg/mcs/utils/constant"
-	"github.com/tikv/pd/pkg/utils/keypath"
+	"github.com/tikv/pd/pkg/mcs/utils"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"go.uber.org/zap"
 )
@@ -75,22 +74,22 @@ type HeartbeatStreams struct {
 }
 
 // NewHeartbeatStreams creates a new HeartbeatStreams which enable background running by default.
-func NewHeartbeatStreams(ctx context.Context, typ string, storeInformer core.StoreSetInformer) *HeartbeatStreams {
-	return newHbStreams(ctx, typ, storeInformer, true)
+func NewHeartbeatStreams(ctx context.Context, clusterID uint64, typ string, storeInformer core.StoreSetInformer) *HeartbeatStreams {
+	return newHbStreams(ctx, clusterID, typ, storeInformer, true)
 }
 
 // NewTestHeartbeatStreams creates a new HeartbeatStreams for test purpose only.
 // Please use NewHeartbeatStreams for other usage.
-func NewTestHeartbeatStreams(ctx context.Context, storeInformer core.StoreSetInformer, needRun bool) *HeartbeatStreams {
-	return newHbStreams(ctx, "", storeInformer, needRun)
+func NewTestHeartbeatStreams(ctx context.Context, clusterID uint64, storeInformer core.StoreSetInformer, needRun bool) *HeartbeatStreams {
+	return newHbStreams(ctx, clusterID, "", storeInformer, needRun)
 }
 
-func newHbStreams(ctx context.Context, typ string, storeInformer core.StoreSetInformer, needRun bool) *HeartbeatStreams {
+func newHbStreams(ctx context.Context, clusterID uint64, typ string, storeInformer core.StoreSetInformer, needRun bool) *HeartbeatStreams {
 	hbStreamCtx, hbStreamCancel := context.WithCancel(ctx)
 	hs := &HeartbeatStreams{
 		hbStreamCtx:    hbStreamCtx,
 		hbStreamCancel: hbStreamCancel,
-		clusterID:      keypath.ClusterID(),
+		clusterID:      clusterID,
 		streams:        make(map[uint64]HeartbeatStream),
 		msgCh:          make(chan core.RegionHeartbeatResponse, heartbeatChanCapacity),
 		streamCh:       make(chan streamUpdate, 1),
@@ -115,7 +114,7 @@ func (s *HeartbeatStreams) run() {
 
 	var keepAlive core.RegionHeartbeatResponse
 	switch s.typ {
-	case constant.SchedulingServiceName:
+	case utils.SchedulingServiceName:
 		keepAlive = &schedulingpb.RegionHeartbeatResponse{Header: &schedulingpb.ResponseHeader{ClusterId: s.clusterID}}
 	default:
 		keepAlive = &pdpb.RegionHeartbeatResponse{Header: &pdpb.ResponseHeader{ClusterId: s.clusterID}}
@@ -205,7 +204,7 @@ func (s *HeartbeatStreams) SendMsg(region *core.RegionInfo, op *Operation) {
 	// TODO: use generic
 	var resp core.RegionHeartbeatResponse
 	switch s.typ {
-	case constant.SchedulingServiceName:
+	case utils.SchedulingServiceName:
 		resp = &schedulingpb.RegionHeartbeatResponse{
 			Header:          &schedulingpb.ResponseHeader{ClusterId: s.clusterID},
 			RegionId:        region.GetID(),
@@ -270,7 +269,7 @@ func (s *HeartbeatStreams) Drain(count int) error {
 	if s.needRun {
 		return errors.Normalize("hbstream running enabled")
 	}
-	for range count {
+	for i := 0; i < count; i++ {
 		<-s.msgCh
 	}
 	return nil

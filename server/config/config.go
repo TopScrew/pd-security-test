@@ -38,8 +38,8 @@ import (
 	"github.com/tikv/pd/pkg/utils/metricutil"
 	"github.com/tikv/pd/pkg/utils/typeutil"
 	"github.com/tikv/pd/pkg/versioninfo"
-	"go.etcd.io/etcd/client/pkg/v3/transport"
-	"go.etcd.io/etcd/server/v3/embed"
+	"go.etcd.io/etcd/embed"
+	"go.etcd.io/etcd/pkg/transport"
 	"go.uber.org/zap"
 )
 
@@ -132,14 +132,14 @@ type Config struct {
 	AutoCompactionRetention string `toml:"auto-compaction-retention" json:"auto-compaction-retention-v2"`
 
 	// TickInterval is the interval for etcd Raft tick.
-	TickInterval typeutil.Duration `toml:"tick-interval" json:"tick-interval"`
+	TickInterval typeutil.Duration `toml:"tick-interval"`
 	// ElectionInterval is the interval for etcd Raft election.
-	ElectionInterval typeutil.Duration `toml:"election-interval" json:"election-interval"`
+	ElectionInterval typeutil.Duration `toml:"election-interval"`
 	// Prevote is true to enable Raft Pre-Vote.
 	// If enabled, Raft runs an additional election phase
 	// to check whether it would get enough votes to win
 	// an election, thus minimizing disruptions.
-	PreVote bool `toml:"enable-prevote" json:"enable-prevote"`
+	PreVote bool `toml:"enable-prevote"`
 
 	MaxRequestBytes uint `toml:"max-request-bytes" json:"max-request-bytes"`
 
@@ -148,12 +148,12 @@ type Config struct {
 	LabelProperty LabelPropertyConfig `toml:"label-property" json:"label-property"`
 
 	// For all warnings during parsing.
-	WarningMsgs []string `json:"-"`
+	WarningMsgs []string
 
-	DisableStrictReconfigCheck bool `json:"-"`
+	DisableStrictReconfigCheck bool
 
-	HeartbeatStreamBindInterval typeutil.Duration `json:"-"`
-	LeaderPriorityCheckInterval typeutil.Duration `json:"-"`
+	HeartbeatStreamBindInterval typeutil.Duration
+	LeaderPriorityCheckInterval typeutil.Duration
 
 	Logger   *zap.Logger        `json:"-"`
 	LogProps *log.ZapProperties `json:"-"`
@@ -163,8 +163,6 @@ type Config struct {
 	ReplicationMode ReplicationModeConfig `toml:"replication-mode" json:"replication-mode"`
 
 	Keyspace KeyspaceConfig `toml:"keyspace" json:"keyspace"`
-
-	MicroService MicroServiceConfig `toml:"micro-service" json:"micro-service"`
 
 	Controller rm.ControllerConfig `toml:"controller" json:"controller"`
 }
@@ -250,8 +248,6 @@ const (
 	defaultCheckRegionSplitInterval = 50 * time.Millisecond
 	minCheckRegionSplitInterval     = 1 * time.Millisecond
 	maxCheckRegionSplitInterval     = 100 * time.Millisecond
-
-	defaultEnableSchedulingFallback = true
 )
 
 // Special keys for Labels
@@ -464,11 +460,7 @@ func (c *Config) Adjust(meta *toml.MetaData, reloading bool) error {
 
 	c.Keyspace.adjust(configMetaData.Child("keyspace"))
 
-	c.MicroService.adjust(configMetaData.Child("micro-service"))
-
-	if err := c.Security.Encryption.Adjust(); err != nil {
-		return err
-	}
+	c.Security.Encryption.Adjust()
 
 	c.Controller.Adjust(configMetaData.Child("controller"))
 
@@ -577,9 +569,7 @@ func (c *PDServerConfig) adjust(meta *configutil.ConfigMetaData) error {
 	} else if c.GCTunerThreshold > maxGCTunerThreshold {
 		c.GCTunerThreshold = maxGCTunerThreshold
 	}
-	if err := migrateConfigurationFromFile(meta); err != nil {
-		return err
-	}
+	migrateConfigurationFromFile(meta)
 	return c.Validate()
 }
 
@@ -708,23 +698,24 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 	cfg.QuotaBackendBytes = int64(c.QuotaBackendBytes)
 	cfg.MaxRequestBytes = c.MaxRequestBytes
 
+	allowedCN, serr := c.Security.GetOneAllowedCN()
+	if serr != nil {
+		return nil, serr
+	}
 	cfg.ClientTLSInfo.ClientCertAuth = len(c.Security.CAPath) != 0
 	cfg.ClientTLSInfo.TrustedCAFile = c.Security.CAPath
 	cfg.ClientTLSInfo.CertFile = c.Security.CertPath
 	cfg.ClientTLSInfo.KeyFile = c.Security.KeyPath
-	// Keep compatibility with https://github.com/tikv/pd/pull/2305
-	// Only check client cert when there are multiple CNs.
-	if len(c.Security.CertAllowedCNs) > 1 {
-		cfg.ClientTLSInfo.AllowedCNs = c.Security.CertAllowedCNs
-	}
+	// Client no need to set the CN. (cfg.ClientTLSInfo.AllowedCN = allowedCN)
 	cfg.PeerTLSInfo.ClientCertAuth = len(c.Security.CAPath) != 0
 	cfg.PeerTLSInfo.TrustedCAFile = c.Security.CAPath
 	cfg.PeerTLSInfo.CertFile = c.Security.CertPath
 	cfg.PeerTLSInfo.KeyFile = c.Security.KeyPath
-	cfg.PeerTLSInfo.AllowedCNs = c.Security.CertAllowedCNs
+	cfg.PeerTLSInfo.AllowedCN = allowedCN
 	cfg.ForceNewCluster = c.ForceNewCluster
 	cfg.ZapLoggerBuilder = embed.NewZapCoreLoggerBuilder(c.Logger, c.Logger.Core(), c.LogProps.Syncer)
 	cfg.EnableGRPCGateway = c.EnableGRPCGateway
+	cfg.EnableV2 = true
 	cfg.Logger = "zap"
 	var err error
 
@@ -753,14 +744,13 @@ func (c *Config) GenEmbedEtcdConfig() (*embed.Config, error) {
 
 // DashboardConfig is the configuration for tidb-dashboard.
 type DashboardConfig struct {
-	TiDBCAPath            string `toml:"tidb-cacert-path" json:"tidb-cacert-path"`
-	TiDBCertPath          string `toml:"tidb-cert-path" json:"tidb-cert-path"`
-	TiDBKeyPath           string `toml:"tidb-key-path" json:"tidb-key-path"`
-	PublicPathPrefix      string `toml:"public-path-prefix" json:"public-path-prefix"`
-	InternalProxy         bool   `toml:"internal-proxy" json:"internal-proxy"`
-	EnableTelemetry       bool   `toml:"enable-telemetry" json:"enable-telemetry"`
-	EnableExperimental    bool   `toml:"enable-experimental" json:"enable-experimental"`
-	DisableCustomPromAddr bool   `toml:"disable-custom-prom-addr" json:"disable-custom-prom-addr"`
+	TiDBCAPath         string `toml:"tidb-cacert-path" json:"tidb-cacert-path"`
+	TiDBCertPath       string `toml:"tidb-cert-path" json:"tidb-cert-path"`
+	TiDBKeyPath        string `toml:"tidb-key-path" json:"tidb-key-path"`
+	PublicPathPrefix   string `toml:"public-path-prefix" json:"public-path-prefix"`
+	InternalProxy      bool   `toml:"internal-proxy" json:"internal-proxy"`
+	EnableTelemetry    bool   `toml:"enable-telemetry" json:"enable-telemetry"`
+	EnableExperimental bool   `toml:"enable-experimental" json:"enable-experimental"`
 }
 
 // ToTiDBTLSConfig generates tls config for connecting to TiDB, used by tidb-dashboard.
@@ -832,28 +822,6 @@ func (c *DRAutoSyncReplicationConfig) adjust(meta *configutil.ConfigMetaData) {
 	if !meta.IsDefined("wait-store-timeout") {
 		c.WaitStoreTimeout = typeutil.NewDuration(defaultDRWaitStoreTimeout)
 	}
-}
-
-// MicroServiceConfig is the configuration for micro service.
-type MicroServiceConfig struct {
-	EnableSchedulingFallback bool `toml:"enable-scheduling-fallback" json:"enable-scheduling-fallback,string"`
-}
-
-func (c *MicroServiceConfig) adjust(meta *configutil.ConfigMetaData) {
-	if !meta.IsDefined("enable-scheduling-fallback") {
-		c.EnableSchedulingFallback = defaultEnableSchedulingFallback
-	}
-}
-
-// Clone returns a copy of micro service config.
-func (c *MicroServiceConfig) Clone() *MicroServiceConfig {
-	cfg := *c
-	return &cfg
-}
-
-// IsSchedulingFallbackEnabled returns whether to enable scheduling service fallback to api service.
-func (c *MicroServiceConfig) IsSchedulingFallbackEnabled() bool {
-	return c.EnableSchedulingFallback
 }
 
 // KeyspaceConfig is the configuration for keyspace management.

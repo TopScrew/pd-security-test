@@ -17,7 +17,9 @@ package server
 import (
 	"bytes"
 	"context"
+	errorspkg "errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -42,8 +44,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/sysutil"
 	"github.com/tikv/pd/pkg/audit"
-	bs "github.com/tikv/pd/pkg/basicserver"
-	"github.com/tikv/pd/pkg/cgroup"
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/encryption"
 	"github.com/tikv/pd/pkg/errs"
@@ -55,13 +55,14 @@ import (
 	rm_server "github.com/tikv/pd/pkg/mcs/resourcemanager/server"
 	_ "github.com/tikv/pd/pkg/mcs/resourcemanager/server/apis/v1" // init API group
 	_ "github.com/tikv/pd/pkg/mcs/tso/server/apis/v1"             // init tso API group
-	"github.com/tikv/pd/pkg/mcs/utils/constant"
+	mcs "github.com/tikv/pd/pkg/mcs/utils"
 	"github.com/tikv/pd/pkg/member"
 	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/pkg/replication"
 	sc "github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/schedule/placement"
+	"github.com/tikv/pd/pkg/schedule/schedulers"
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/storage/kv"
@@ -72,7 +73,6 @@ import (
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
 	"github.com/tikv/pd/pkg/utils/jsonutil"
-	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"github.com/tikv/pd/pkg/utils/tsoutil"
@@ -80,10 +80,10 @@ import (
 	"github.com/tikv/pd/pkg/versioninfo"
 	"github.com/tikv/pd/server/cluster"
 	"github.com/tikv/pd/server/config"
-	"go.etcd.io/etcd/api/v3/mvccpb"
-	etcdtypes "go.etcd.io/etcd/client/pkg/v3/types"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/server/v3/embed"
+	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/embed"
+	"go.etcd.io/etcd/mvcc/mvccpb"
+	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -91,8 +91,9 @@ import (
 const (
 	serverMetricsInterval = time.Minute
 	// pdRootPath for all pd servers.
-	pdRootPath  = "/pd"
-	pdAPIPrefix = "/pd/"
+	pdRootPath      = "/pd"
+	pdAPIPrefix     = "/pd/"
+	pdClusterIDPath = "/pd/cluster_id"
 	// idAllocPath for idAllocator to save persistent window's end.
 	idAllocPath  = "alloc_id"
 	idAllocLabel = "idalloc"
@@ -130,6 +131,7 @@ type streamWrapper struct {
 }
 
 // Server is the pd server. It implements bs.Server
+// nolint
 type Server struct {
 	diagnosticspb.DiagnosticsServer
 
@@ -160,6 +162,7 @@ type Server struct {
 	electionClient *clientv3.Client
 	// http client
 	httpClient *http.Client
+	clusterID  uint64 // pd cluster id.
 	rootPath   string
 
 	// Server services.
@@ -219,11 +222,11 @@ type Server struct {
 	// related data structures defined in the PD grpc service
 	pdProtoFactory *tsoutil.PDProtoFactory
 
-	serviceRateLimiter *ratelimit.Controller
+	serviceRateLimiter *ratelimit.Limiter
 	serviceLabels      map[string][]apiutil.AccessPath
 	apiServiceLabelMap map[apiutil.AccessPath]string
 
-	grpcServiceRateLimiter *ratelimit.Controller
+	grpcServiceRateLimiter *ratelimit.Limiter
 	grpcServiceLabels      map[string]struct{}
 	grpcServer             *grpc.Server
 
@@ -236,9 +239,6 @@ type Server struct {
 	servicePrimaryMap        sync.Map /* Store as map[string]string */
 	tsoPrimaryWatcher        *etcdutil.LoopWatcher
 	schedulingPrimaryWatcher *etcdutil.LoopWatcher
-
-	// Cgroup Monitor
-	cgMonitor cgroup.Monitor
 }
 
 // HandlerBuilder builds a server HTTP handler.
@@ -279,8 +279,8 @@ func CreateServer(ctx context.Context, cfg *config.Config, services []string, le
 		audit.NewLocalLogBackend(true),
 		audit.NewPrometheusHistogramBackend(serviceAuditHistogram, false),
 	}
-	s.serviceRateLimiter = ratelimit.NewController(s.ctx, "http", apiConcurrencyGauge)
-	s.grpcServiceRateLimiter = ratelimit.NewController(s.ctx, "grpc", apiConcurrencyGauge)
+	s.serviceRateLimiter = ratelimit.NewLimiter()
+	s.grpcServiceRateLimiter = ratelimit.NewLimiter()
 	s.serviceAuditBackendLabels = make(map[string]*audit.BackendLabels)
 	s.serviceLabels = make(map[string][]apiutil.AccessPath)
 	s.grpcServiceLabels = make(map[string]struct{})
@@ -303,7 +303,7 @@ func CreateServer(ctx context.Context, cfg *config.Config, services []string, le
 	failpoint.Inject("useGlobalRegistry", func() {
 		s.registry = registry.ServerServiceRegistry
 	})
-	s.registry.RegisterService("MetaStorage", ms_server.NewService)
+	s.registry.RegisterService("MetaStorage", ms_server.NewService[*Server])
 	s.registry.RegisterService("ResourceManager", rm_server.NewService[*Server])
 	// Register the micro services REST path.
 	s.registry.InstallAllRESTHandler(s, etcdCfg.UserHandlers)
@@ -333,7 +333,7 @@ func (s *Server) startEtcd(ctx context.Context) error {
 	}
 
 	// Check cluster ID
-	urlMap, err := etcdtypes.NewURLsMap(s.cfg.InitialCluster)
+	urlMap, err := types.NewURLsMap(s.cfg.InitialCluster)
 	if err != nil {
 		return errs.ErrEtcdURLMap.Wrap(err).GenWithStackByCause()
 	}
@@ -368,11 +368,9 @@ func (s *Server) startEtcd(ctx context.Context) error {
 }
 
 func (s *Server) initGRPCServiceLabels() {
-	for name, serviceInfo := range s.grpcServer.GetServiceInfo() {
-		if name == gRPCServiceName {
-			for _, methodInfo := range serviceInfo.Methods {
-				s.grpcServiceLabels[methodInfo.Name] = struct{}{}
-			}
+	for _, serviceInfo := range s.grpcServer.GetServiceInfo() {
+		for _, methodInfo := range serviceInfo.Methods {
+			s.grpcServiceLabels[methodInfo.Name] = struct{}{}
 		}
 	}
 }
@@ -430,26 +428,21 @@ func (s *Server) AddStartCallback(callbacks ...func()) {
 }
 
 func (s *Server) startServer(ctx context.Context) error {
-	clusterID, err := endpoint.InitClusterID(s.client)
-	if err != nil {
+	var err error
+	if s.clusterID, err = etcdutil.InitClusterID(s.client, pdClusterIDPath); err != nil {
 		log.Error("failed to init cluster id", errs.ZapError(err))
 		return err
 	}
+	log.Info("init cluster id", zap.Uint64("cluster-id", s.clusterID))
 	// It may lose accuracy if use float64 to store uint64. So we store the cluster id in label.
-	metadataGauge.WithLabelValues(fmt.Sprintf("cluster%d", clusterID)).Set(0)
-	bs.ServerInfoGauge.WithLabelValues(versioninfo.PDReleaseVersion, versioninfo.PDGitHash).Set(float64(time.Now().Unix()))
+	metadataGauge.WithLabelValues(fmt.Sprintf("cluster%d", s.clusterID)).Set(0)
+	serverInfo.WithLabelValues(versioninfo.PDReleaseVersion, versioninfo.PDGitHash).Set(float64(time.Now().Unix()))
 
-	s.rootPath = keypath.PDRootPath()
+	s.rootPath = endpoint.PDRootPath(s.clusterID)
 	s.member.InitMemberInfo(s.cfg.AdvertiseClientUrls, s.cfg.AdvertisePeerUrls, s.Name(), s.rootPath)
-	if err := s.member.SetMemberDeployPath(s.member.ID()); err != nil {
-		return err
-	}
-	if err := s.member.SetMemberBinaryVersion(s.member.ID(), versioninfo.PDReleaseVersion); err != nil {
-		return err
-	}
-	if err := s.member.SetMemberGitHash(s.member.ID(), versioninfo.PDGitHash); err != nil {
-		return err
-	}
+	s.member.SetMemberDeployPath(s.member.ID())
+	s.member.SetMemberBinaryVersion(s.member.ID(), versioninfo.PDReleaseVersion)
+	s.member.SetMemberGitHash(s.member.ID(), versioninfo.PDGitHash)
 	s.idAllocator = id.NewAllocator(&id.AllocatorParams{
 		Client:    s.client,
 		RootPath:  s.rootPath,
@@ -461,75 +454,64 @@ func (s *Server) startServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Initialize an etcd storage as the default storage.
-	defaultStorage := storage.NewStorageWithEtcdBackend(s.client, s.rootPath)
-	// Initialize a specialized LevelDB storage to store the region-related meta info independently.
-	regionStorage, err := storage.NewRegionStorageWithLevelDBBackend(
-		ctx,
-		filepath.Join(s.cfg.DataDir, "region-meta"),
-		s.encryptionKeyManager)
+	regionStorage, err := storage.NewStorageWithLevelDBBackend(ctx, filepath.Join(s.cfg.DataDir, "region-meta"), s.encryptionKeyManager)
 	if err != nil {
 		return err
 	}
+	defaultStorage := storage.NewStorageWithEtcdBackend(s.client, s.rootPath)
 	s.storage = storage.NewCoreStorage(defaultStorage, regionStorage)
 	s.tsoDispatcher = tsoutil.NewTSODispatcher(tsoProxyHandleDuration, tsoProxyBatchSize)
 	s.tsoProtoFactory = &tsoutil.TSOProtoFactory{}
 	s.pdProtoFactory = &tsoutil.PDProtoFactory{}
-	s.tsoAllocatorManager = tso.NewAllocatorManager(s.ctx, constant.DefaultKeyspaceGroupID, s.member, s.rootPath, s.storage, s)
-	// When disabled the Local TSO, we should clean up the Local TSO Allocator's meta info written in etcd if it exists.
-	if !s.cfg.EnableLocalTSO {
-		if err = s.tsoAllocatorManager.CleanUpDCLocation(); err != nil {
-			return err
+	if !s.IsAPIServiceMode() {
+		s.tsoAllocatorManager = tso.NewAllocatorManager(s.ctx, mcs.DefaultKeyspaceGroupID, s.member, s.rootPath, s.storage, s, false)
+		// When disabled the Local TSO, we should clean up the Local TSO Allocator's meta info written in etcd if it exists.
+		if !s.cfg.EnableLocalTSO {
+			if err = s.tsoAllocatorManager.CleanUpDCLocation(); err != nil {
+				return err
+			}
 		}
-	}
-	if zone, exist := s.cfg.Labels[config.ZoneLabel]; exist && zone != "" && s.cfg.EnableLocalTSO {
-		if err = s.tsoAllocatorManager.SetLocalTSOConfig(zone); err != nil {
-			return err
+		if zone, exist := s.cfg.Labels[config.ZoneLabel]; exist && zone != "" && s.cfg.EnableLocalTSO {
+			if err = s.tsoAllocatorManager.SetLocalTSOConfig(zone); err != nil {
+				return err
+			}
 		}
 	}
 
 	s.gcSafePointManager = gc.NewSafePointManager(s.storage, s.cfg.PDServerCfg)
 	s.basicCluster = core.NewBasicCluster()
-	s.cluster = cluster.NewRaftCluster(ctx, s.GetMember(), s.GetBasicCluster(), s.GetStorage(), syncer.NewRegionSyncer(s), s.client, s.httpClient, s.tsoAllocatorManager)
+	s.cluster = cluster.NewRaftCluster(ctx, s.clusterID, syncer.NewRegionSyncer(s), s.client, s.httpClient)
 	keyspaceIDAllocator := id.NewAllocator(&id.AllocatorParams{
 		Client:    s.client,
 		RootPath:  s.rootPath,
-		AllocPath: keypath.KeyspaceIDAlloc(),
+		AllocPath: endpoint.KeyspaceIDAlloc(),
 		Label:     keyspace.AllocLabel,
 		Member:    s.member.MemberValue(),
 		Step:      keyspace.AllocStep,
 	})
 	if s.IsAPIServiceMode() {
-		s.keyspaceGroupManager = keyspace.NewKeyspaceGroupManager(s.ctx, s.storage, s.client)
+		s.keyspaceGroupManager = keyspace.NewKeyspaceGroupManager(s.ctx, s.storage, s.client, s.clusterID)
 	}
 	s.keyspaceManager = keyspace.NewKeyspaceManager(s.ctx, s.storage, s.cluster, keyspaceIDAllocator, &s.cfg.Keyspace, s.keyspaceGroupManager)
 	s.safePointV2Manager = gc.NewSafePointManagerV2(s.ctx, s.storage, s.storage, s.storage)
-	s.hbStreams = hbstream.NewHeartbeatStreams(ctx, "", s.cluster)
+	s.hbStreams = hbstream.NewHeartbeatStreams(ctx, s.clusterID, "", s.cluster)
 	// initial hot_region_storage in here.
-
-	s.hotRegionStorage, err = storage.NewHotRegionsStorage(
-		ctx, filepath.Join(s.cfg.DataDir, "hot-region"), s.encryptionKeyManager, s.handler)
-	if err != nil {
-		return err
+	if !s.IsAPIServiceMode() {
+		s.hotRegionStorage, err = storage.NewHotRegionsStorage(
+			ctx, filepath.Join(s.cfg.DataDir, "hot-region"), s.encryptionKeyManager, s.handler)
+		if err != nil {
+			return err
+		}
 	}
-
 	// Run callbacks
 	log.Info("triggering the start callback functions")
 	for _, cb := range s.startCallbacks {
 		cb()
 	}
 
-	// to init all rate limiter and metrics
-	for service := range s.serviceLabels {
-		s.serviceRateLimiter.Update(service, ratelimit.InitLimiter())
-	}
-	for service := range s.grpcServiceLabels {
-		s.grpcServiceRateLimiter.Update(service, ratelimit.InitLimiter())
-	}
-
 	// Server has started.
 	atomic.StoreInt64(&s.isRunning, 1)
-	bs.ServerMaxProcsGauge.Set(float64(runtime.GOMAXPROCS(0)))
+	serverMaxProcs.Set(float64(runtime.GOMAXPROCS(0)))
 	return nil
 }
 
@@ -546,8 +528,6 @@ func (s *Server) Close() {
 	}
 
 	log.Info("closing server")
-
-	s.cgMonitor.StopMonitor()
 
 	s.stopServerLoop()
 	if s.IsAPIServiceMode() {
@@ -586,21 +566,11 @@ func (s *Server) Close() {
 		}
 	}
 
-	s.grpcServiceRateLimiter.Close()
-	s.serviceRateLimiter.Close()
 	// Run callbacks
 	log.Info("triggering the close callback functions")
 	for _, cb := range s.closeCallbacks {
 		cb()
 	}
-
-	s.clientConns.Range(func(_, value any) bool {
-		conn := value.(*grpc.ClientConn)
-		if err := conn.Close(); err != nil {
-			log.Error("close grpc client meet error", errs.ZapError(err))
-		}
-		return true
-	})
 
 	log.Info("close server")
 }
@@ -623,8 +593,6 @@ func (s *Server) Run() error {
 	if err := s.startServer(s.ctx); err != nil {
 		return err
 	}
-
-	s.cgMonitor.StartMonitor(s.ctx)
 
 	failpoint.Inject("delayStartServerLoop", func() {
 		time.Sleep(2 * time.Second)
@@ -709,13 +677,13 @@ func (s *Server) collectEtcdStateMetrics() {
 }
 
 func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapResponse, error) {
-	clusterID := keypath.ClusterID()
+	clusterID := s.clusterID
 
 	log.Info("try to bootstrap raft cluster",
 		zap.Uint64("cluster-id", clusterID),
 		zap.String("request", fmt.Sprintf("%v", req)))
 
-	if err := checkBootstrapRequest(req); err != nil {
+	if err := checkBootstrapRequest(clusterID, req); err != nil {
 		return nil, err
 	}
 
@@ -729,7 +697,7 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	clusterRootPath := keypath.ClusterRootPath(s.rootPath)
+	clusterRootPath := endpoint.ClusterRootPath(s.rootPath)
 
 	var ops []clientv3.Op
 	ops = append(ops, clientv3.OpPut(clusterRootPath, string(clusterValue)))
@@ -737,7 +705,7 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 	// Set bootstrap time
 	// Because we will write the cluster meta into etcd directly,
 	// so we need to handle the root key path manually here.
-	bootstrapKey := keypath.AppendToRootPath(s.rootPath, keypath.ClusterBootstrapTimeKey())
+	bootstrapKey := endpoint.AppendToRootPath(s.rootPath, endpoint.ClusterBootstrapTimeKey())
 	nano := time.Now().UnixNano()
 
 	timeData := typeutil.Uint64ToBytes(uint64(nano))
@@ -745,7 +713,7 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 
 	// Set store meta
 	storeMeta := req.GetStore()
-	storePath := keypath.AppendToRootPath(s.rootPath, keypath.StorePath(storeMeta.GetId()))
+	storePath := endpoint.AppendToRootPath(s.rootPath, endpoint.StorePath(storeMeta.GetId()))
 	storeValue, err := storeMeta.Marshal()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -758,7 +726,7 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 	}
 
 	// Set region meta with region id.
-	regionPath := keypath.AppendToRootPath(s.rootPath, keypath.RegionPath(req.GetRegion().GetId()))
+	regionPath := endpoint.AppendToRootPath(s.rootPath, endpoint.RegionPath(req.GetRegion().GetId()))
 	ops = append(ops, clientv3.OpPut(regionPath, string(regionValue)))
 
 	// TODO: we must figure out a better way to handle bootstrap failed, maybe intervene manually.
@@ -782,7 +750,7 @@ func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapRe
 		log.Warn("flush the bootstrap region failed", errs.ZapError(err))
 	}
 
-	if err := s.cluster.Start(s, true); err != nil {
+	if err := s.cluster.Start(s); err != nil {
 		return nil, err
 	}
 
@@ -800,7 +768,7 @@ func (s *Server) createRaftCluster() error {
 		return nil
 	}
 
-	return s.cluster.Start(s, false)
+	return s.cluster.Start(s)
 }
 
 func (s *Server) stopRaftCluster() {
@@ -938,6 +906,11 @@ func (s *Server) Name() string {
 	return s.cfg.Name
 }
 
+// ClusterID returns the cluster ID of this server.
+func (s *Server) ClusterID() uint64 {
+	return s.clusterID
+}
+
 // StartTimestamp returns the start timestamp of this server
 func (s *Server) StartTimestamp() int64 {
 	return s.startTimestamp
@@ -973,9 +946,29 @@ func (s *Server) GetConfig() *config.Config {
 	cfg.PDServerCfg = *s.persistOptions.GetPDServerConfig().Clone()
 	cfg.ReplicationMode = *s.persistOptions.GetReplicationModeConfig()
 	cfg.Keyspace = *s.persistOptions.GetKeyspaceConfig().Clone()
-	cfg.MicroService = *s.persistOptions.GetMicroServiceConfig().Clone()
 	cfg.LabelProperty = s.persistOptions.GetLabelPropertyConfig().Clone()
 	cfg.ClusterVersion = *s.persistOptions.GetClusterVersion()
+	if s.storage == nil {
+		return cfg
+	}
+	sches, configs, err := s.storage.LoadAllSchedulerConfigs()
+	if err != nil {
+		return cfg
+	}
+	payload := make(map[string]interface{})
+	for i, sche := range sches {
+		var config interface{}
+		err := schedulers.DecodeConfig([]byte(configs[i]), &config)
+		if err != nil {
+			log.Error("failed to decode scheduler config",
+				zap.String("config", configs[i]),
+				zap.String("scheduler", sche),
+				errs.ZapError(err))
+			continue
+		}
+		payload[sche] = config
+	}
+	cfg.Schedule.SchedulersPayload = payload
 	return cfg
 }
 
@@ -1004,27 +997,6 @@ func (s *Server) SetKeyspaceConfig(cfg config.KeyspaceConfig) error {
 	return nil
 }
 
-// GetMicroServiceConfig gets the micro service config information.
-func (s *Server) GetMicroServiceConfig() *config.MicroServiceConfig {
-	return s.persistOptions.GetMicroServiceConfig().Clone()
-}
-
-// SetMicroServiceConfig sets the micro service config information.
-func (s *Server) SetMicroServiceConfig(cfg config.MicroServiceConfig) error {
-	old := s.persistOptions.GetMicroServiceConfig()
-	s.persistOptions.SetMicroServiceConfig(&cfg)
-	if err := s.persistOptions.Persist(s.storage); err != nil {
-		s.persistOptions.SetMicroServiceConfig(old)
-		log.Error("failed to update micro service config",
-			zap.Reflect("new", cfg),
-			zap.Reflect("old", old),
-			errs.ZapError(err))
-		return err
-	}
-	log.Info("micro service config is updated", zap.Reflect("new", cfg), zap.Reflect("old", old))
-	return nil
-}
-
 // GetScheduleConfig gets the balance config information.
 func (s *Server) GetScheduleConfig() *sc.ScheduleConfig {
 	return s.persistOptions.GetScheduleConfig().Clone()
@@ -1040,6 +1012,7 @@ func (s *Server) SetScheduleConfig(cfg sc.ScheduleConfig) error {
 		return err
 	}
 	old := s.persistOptions.GetScheduleConfig()
+	cfg.SchedulersPayload = nil
 	s.persistOptions.SetScheduleConfig(&cfg)
 	if err := s.persistOptions.Persist(s.storage); err != nil {
 		s.persistOptions.SetScheduleConfig(old)
@@ -1093,7 +1066,7 @@ func (s *Server) SetReplicationConfig(cfg sc.ReplicationConfig) error {
 			return errs.ErrNotBootstrapped.GenWithStackByArgs()
 		}
 		// replication.MaxReplicas won't work when placement rule is enabled and not only have one default rule.
-		defaultRule := rc.GetRuleManager().GetRule(placement.DefaultGroupID, placement.DefaultRuleID)
+		defaultRule := rc.GetRuleManager().GetRule("pd", "default")
 
 		CheckInDefaultRule := func() error {
 			// replication config won't work when placement rule is enabled and exceeds one default rule
@@ -1187,7 +1160,7 @@ func (s *Server) UpdateRateLimitConfig(key, label string, value ratelimit.Dimens
 }
 
 // UpdateRateLimit is used to update rate-limit config which will overwrite limiter-config
-func (s *Server) UpdateRateLimit(cfg *config.RateLimitConfig, key string, value any) error {
+func (s *Server) UpdateRateLimit(cfg *config.RateLimitConfig, key string, value interface{}) error {
 	updated, found, err := jsonutil.AddKeyValue(cfg, key, value)
 	if err != nil {
 		return err
@@ -1236,7 +1209,7 @@ func (s *Server) UpdateGRPCRateLimitConfig(key, label string, value ratelimit.Di
 }
 
 // UpdateGRPCRateLimit is used to update gRPC rate-limit config which will overwrite limiter-config
-func (s *Server) UpdateGRPCRateLimit(cfg *config.GRPCRateLimitConfig, key string, value any) error {
+func (s *Server) UpdateGRPCRateLimit(cfg *config.GRPCRateLimitConfig, key string, value interface{}) error {
 	updated, found, err := jsonutil.AddKeyValue(cfg, key, value)
 	if err != nil {
 		return err
@@ -1413,27 +1386,10 @@ func (s *Server) GetRaftCluster() *cluster.RaftCluster {
 	return s.cluster
 }
 
-// IsServiceIndependent returns whether the service is independent.
-func (s *Server) IsServiceIndependent(name string) bool {
-	if s.mode == APIServiceMode && !s.IsClosed() {
-		if name == constant.TSOServiceName && !cluster.IsTSODynamicSwitchingEnabled {
-			return true
-		}
-		return s.cluster.IsServiceIndependent(name)
-	}
-	return false
-}
-
-// DirectlyGetRaftCluster returns raft cluster directly.
-// Only used for test.
-func (s *Server) DirectlyGetRaftCluster() *cluster.RaftCluster {
-	return s.cluster
-}
-
 // GetCluster gets cluster.
 func (s *Server) GetCluster() *metapb.Cluster {
 	return &metapb.Cluster{
-		Id:           keypath.ClusterID(),
+		Id:           s.clusterID,
 		MaxPeerCount: uint32(s.persistOptions.GetMaxReplicas()),
 	}
 }
@@ -1519,7 +1475,7 @@ func (s *Server) SetServiceAuditBackendLabels(serviceLabel string, labels []stri
 }
 
 // GetServiceRateLimiter is used to get rate limiter
-func (s *Server) GetServiceRateLimiter() *ratelimit.Controller {
+func (s *Server) GetServiceRateLimiter() *ratelimit.Limiter {
 	return s.serviceRateLimiter
 }
 
@@ -1534,7 +1490,7 @@ func (s *Server) UpdateServiceRateLimiter(serviceLabel string, opts ...ratelimit
 }
 
 // GetGRPCRateLimiter is used to get rate limiter
-func (s *Server) GetGRPCRateLimiter() *ratelimit.Controller {
+func (s *Server) GetGRPCRateLimiter() *ratelimit.Limiter {
 	return s.grpcServiceRateLimiter
 }
 
@@ -1545,6 +1501,8 @@ func (s *Server) UpdateGRPCServiceRateLimiter(serviceLabel string, opts ...ratel
 
 // GetClusterStatus gets cluster status.
 func (s *Server) GetClusterStatus() (*cluster.Status, error) {
+	s.cluster.Lock()
+	defer s.cluster.Unlock()
 	return s.cluster.LoadClusterStatus()
 }
 
@@ -1673,12 +1631,10 @@ func (s *Server) leaderLoop() {
 					log.Info("the pd leader is lost for a long time, try to re-campaign a pd leader with resign etcd leader",
 						zap.Duration("timeout", randomTimeout),
 						zap.Time("last-updated", lastUpdated),
-						zap.String("current-leader-member-id", etcdtypes.ID(etcdLeader).String()),
-						zap.String("transferee-member-id", etcdtypes.ID(s.member.ID()).String()),
+						zap.String("current-leader-member-id", types.ID(etcdLeader).String()),
+						zap.String("transferee-member-id", types.ID(s.member.ID()).String()),
 					)
-					if err := s.member.MoveEtcdLeader(s.ctx, etcdLeader, s.member.ID()); err != nil {
-						log.Error("failed to move etcd leader", errs.ZapError(err))
-					}
+					s.member.MoveEtcdLeader(s.ctx, etcdLeader, s.member.ID())
 				}
 			}
 			log.Info("skip campaigning of pd leader and check later",
@@ -1721,6 +1677,29 @@ func (s *Server) campaignLeader() {
 	s.member.KeepLeader(ctx)
 	log.Info(fmt.Sprintf("campaign %s leader ok", s.mode), zap.String("campaign-leader-name", s.Name()))
 
+	if !s.IsAPIServiceMode() {
+		allocator, err := s.tsoAllocatorManager.GetAllocator(tso.GlobalDCLocation)
+		if err != nil {
+			log.Error("failed to get the global TSO allocator", errs.ZapError(err))
+			return
+		}
+		log.Info("initializing the global TSO allocator")
+		if err := allocator.Initialize(0); err != nil {
+			log.Error("failed to initialize the global TSO allocator", errs.ZapError(err))
+			return
+		}
+		defer func() {
+			s.tsoAllocatorManager.ResetAllocatorGroup(tso.GlobalDCLocation)
+			failpoint.Inject("updateAfterResetTSO", func() {
+				if err = allocator.UpdateTSO(); !errorspkg.Is(err, errs.ErrUpdateTimestamp) {
+					log.Panic("the tso update after reset should return ErrUpdateTimestamp as expected", zap.Error(err))
+				}
+				if allocator.IsInitialize() {
+					log.Panic("the allocator should be uninitialized after reset")
+				}
+			})
+		}()
+	}
 	if err := s.reloadConfigFromKV(); err != nil {
 		log.Error("failed to reload configuration", errs.ZapError(err))
 		return
@@ -1772,10 +1751,10 @@ func (s *Server) campaignLeader() {
 		member.ServiceMemberGauge.WithLabelValues(s.mode).Set(0)
 	})
 
-	CheckPDVersionWithClusterVersion(s.persistOptions)
+	CheckPDVersion(s.persistOptions)
 	log.Info(fmt.Sprintf("%s leader is ready to serve", s.mode), zap.String("leader-name", s.Name()))
 
-	leaderTicker := time.NewTicker(constant.LeaderTickInterval)
+	leaderTicker := time.NewTicker(mcs.LeaderTickInterval)
 	defer leaderTicker.Stop()
 
 	for {
@@ -1917,14 +1896,30 @@ func (s *Server) PersistFile(name string, data []byte) error {
 }
 
 // SaveTTLConfig save ttl config
-func (s *Server) SaveTTLConfig(data map[string]any, ttl time.Duration) error {
+func (s *Server) SaveTTLConfig(data map[string]interface{}, ttl time.Duration) error {
 	for k := range data {
 		if !config.IsSupportedTTLConfig(k) {
 			return fmt.Errorf("unsupported ttl config %s", k)
 		}
 	}
 	for k, v := range data {
-		if err := s.persistOptions.SetTTLData(s.ctx, s.client, k, fmt.Sprint(v), ttl); err != nil {
+		var valueStr string
+		switch val := v.(type) {
+		case float64:
+			// math.Trunc(val) returns the integer part of val
+			if val == math.Trunc(val) {
+				valueStr = strconv.FormatInt(int64(val), 10)
+			} else {
+				valueStr = strconv.FormatFloat(val, 'f', -1, 64)
+			}
+		case int, int8, int16, int32, int64:
+			valueStr = fmt.Sprintf("%d", val)
+		case uint, uint8, uint16, uint32, uint64:
+			valueStr = fmt.Sprintf("%d", val)
+		default:
+			valueStr = fmt.Sprint(v)
+		}
+		if err := s.persistOptions.SetTTLData(s.ctx, s.client, k, valueStr, ttl); err != nil {
 			return err
 		}
 	}
@@ -1948,7 +1943,7 @@ func (s *Server) IsTTLConfigExist(key string) bool {
 // and is deleted after BR EBS restore is done.
 func (s *Server) MarkSnapshotRecovering() error {
 	log.Info("mark snapshot recovering")
-	markPath := keypath.AppendToRootPath(s.rootPath, recoveringMarkPath)
+	markPath := endpoint.AppendToRootPath(s.rootPath, recoveringMarkPath)
 	// the value doesn't matter, set to a static string
 	_, err := kv.NewSlowLogTxn(s.client).
 		If(clientv3.Compare(clientv3.CreateRevision(markPath), "=", 0)).
@@ -1960,7 +1955,7 @@ func (s *Server) MarkSnapshotRecovering() error {
 
 // IsSnapshotRecovering check whether recovering-mark marked
 func (s *Server) IsSnapshotRecovering(ctx context.Context) (bool, error) {
-	markPath := keypath.AppendToRootPath(s.rootPath, recoveringMarkPath)
+	markPath := endpoint.AppendToRootPath(s.rootPath, recoveringMarkPath)
 	resp, err := s.client.Get(ctx, markPath)
 	if err != nil {
 		return false, err
@@ -1971,7 +1966,7 @@ func (s *Server) IsSnapshotRecovering(ctx context.Context) (bool, error) {
 // UnmarkSnapshotRecovering unmark recovering mark
 func (s *Server) UnmarkSnapshotRecovering(ctx context.Context) error {
 	log.Info("unmark snapshot recovering")
-	markPath := keypath.AppendToRootPath(s.rootPath, recoveringMarkPath)
+	markPath := endpoint.AppendToRootPath(s.rootPath, recoveringMarkPath)
 	_, err := s.client.Delete(ctx, markPath)
 	// if other client already unmarked, return success too
 	return err
@@ -1982,7 +1977,7 @@ func (s *Server) UnmarkSnapshotRecovering(ctx context.Context) error {
 func (s *Server) GetServicePrimaryAddr(ctx context.Context, serviceName string) (string, bool) {
 	ticker := time.NewTicker(retryIntervalGetServicePrimary)
 	defer ticker.Stop()
-	for range maxRetryTimesGetServicePrimary {
+	for i := 0; i < maxRetryTimesGetServicePrimary; i++ {
 		if v, ok := s.servicePrimaryMap.Load(serviceName); ok {
 			return v.(string), true
 		}
@@ -2004,16 +1999,16 @@ func (s *Server) SetServicePrimaryAddr(serviceName, addr string) {
 }
 
 func (s *Server) initTSOPrimaryWatcher() {
-	serviceName := constant.TSOServiceName
-	tsoRootPath := keypath.TSOSvcRootPath()
-	tsoServicePrimaryKey := keypath.KeyspaceGroupPrimaryPath(tsoRootPath, constant.DefaultKeyspaceGroupID)
+	serviceName := mcs.TSOServiceName
+	tsoRootPath := endpoint.TSOSvcRootPath(s.clusterID)
+	tsoServicePrimaryKey := endpoint.KeyspaceGroupPrimaryPath(tsoRootPath, mcs.DefaultKeyspaceGroupID)
 	s.tsoPrimaryWatcher = s.initServicePrimaryWatcher(serviceName, tsoServicePrimaryKey)
 	s.tsoPrimaryWatcher.StartWatchLoop()
 }
 
 func (s *Server) initSchedulingPrimaryWatcher() {
-	serviceName := constant.SchedulingServiceName
-	primaryKey := keypath.SchedulingPrimaryPath()
+	serviceName := mcs.SchedulingServiceName
+	primaryKey := endpoint.SchedulingPrimaryPath(s.clusterID)
 	s.schedulingPrimaryWatcher = s.initServicePrimaryWatcher(serviceName, primaryKey)
 	s.schedulingPrimaryWatcher.StartWatchLoop()
 }
@@ -2032,7 +2027,7 @@ func (s *Server) initServicePrimaryWatcher(serviceName string, primaryKey string
 		}
 		return nil
 	}
-	deleteFn := func(*mvccpb.KeyValue) error {
+	deleteFn := func(kv *mvccpb.KeyValue) error {
 		var oldPrimary string
 		v, ok := s.servicePrimaryMap.Load(serviceName)
 		if ok {
@@ -2049,16 +2044,14 @@ func (s *Server) initServicePrimaryWatcher(serviceName string, primaryKey string
 		s.client,
 		name,
 		primaryKey,
-		func([]*clientv3.Event) error { return nil },
 		putFn,
 		deleteFn,
-		func([]*clientv3.Event) error { return nil },
-		false, /* withPrefix */
+		func() error { return nil },
 	)
 }
 
 // RecoverAllocID recover alloc id. set current base id to input id
-func (s *Server) RecoverAllocID(_ context.Context, id uint64) error {
+func (s *Server) RecoverAllocID(ctx context.Context, id uint64) error {
 	return s.idAllocator.SetBase(id)
 }
 
@@ -2132,10 +2125,4 @@ func (s *Server) GetMaxResetTSGap() time.Duration {
 // Notes: it is only used for test.
 func (s *Server) SetClient(client *clientv3.Client) {
 	s.client = client
-}
-
-// GetGlobalTSOAllocator return global tso allocator
-// It only is used for test.
-func (s *Server) GetGlobalTSOAllocator() tso.Allocator {
-	return s.cluster.GetGlobalTSOAllocator()
 }

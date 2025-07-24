@@ -87,7 +87,8 @@ func TestStatus(t *testing.T) {
 		},
 	}, rep.GetReplicationStatus())
 
-	re.NoError(rep.drSwitchToAsync(nil))
+	err = rep.drSwitchToAsync(nil)
+	re.NoError(err)
 	re.Equal(&pb.ReplicationStatus{
 		Mode: pb.ReplicationMode_DR_AUTO_SYNC,
 		DrAutoSync: &pb.DRAutoSync{
@@ -98,7 +99,8 @@ func TestStatus(t *testing.T) {
 		},
 	}, rep.GetReplicationStatus())
 
-	re.NoError(rep.drSwitchToSyncRecover())
+	err = rep.drSwitchToSyncRecover()
+	re.NoError(err)
 	stateID := rep.drAutoSync.StateID
 	re.Equal(&pb.ReplicationStatus{
 		Mode: pb.ReplicationMode_DR_AUTO_SYNC,
@@ -142,7 +144,7 @@ func (rep *mockFileReplicator) GetMembers() ([]*pdpb.Member, error) {
 	return members, nil
 }
 
-func (rep *mockFileReplicator) ReplicateFileToMember(_ context.Context, member *pdpb.Member, _ string, data []byte) error {
+func (rep *mockFileReplicator) ReplicateFileToMember(ctx context.Context, member *pdpb.Member, name string, data []byte) error {
 	if err := rep.errors[member.GetMemberId()]; err != nil {
 		return err
 	}
@@ -258,7 +260,7 @@ func TestStateSwitch(t *testing.T) {
 	rep.tickUpdateState()
 	re.Equal(drStateSync, rep.drGetState())
 
-	// once zone2 down, switch to async state.
+	// once zone2 down, swith to async state.
 	setStoreState(cluster, "up", "up", "up", "up", "down", "down")
 	rep.tickUpdateState()
 	re.Equal(drStateAsyncWait, rep.drGetState())
@@ -325,7 +327,7 @@ func TestStateSwitch(t *testing.T) {
 	re.Equal(drStateSyncRecover, rep.drGetState())
 	assertStateIDUpdate()
 
-	re.NoError(rep.drSwitchToAsync([]uint64{1, 2, 3, 4, 5}))
+	rep.drSwitchToAsync([]uint64{1, 2, 3, 4, 5})
 	rep.config.DRAutoSync.WaitRecoverTimeout = typeutil.NewDuration(time.Hour)
 	rep.tickUpdateState()
 	re.Equal(drStateAsync, rep.drGetState()) // wait recover timeout
@@ -344,14 +346,14 @@ func TestStateSwitch(t *testing.T) {
 	re.Equal(drStateAsync, rep.drGetState())
 	assertStateIDUpdate()
 	// lost majority, does not switch to async.
-	re.NoError(rep.drSwitchToSyncRecover())
+	rep.drSwitchToSyncRecover()
 	assertStateIDUpdate()
 	setStoreState(cluster, "down", "down", "up", "up", "down", "down")
 	rep.tickUpdateState()
 	re.Equal(drStateSyncRecover, rep.drGetState())
 
 	// sync_recover -> sync
-	re.NoError(rep.drSwitchToSyncRecover())
+	rep.drSwitchToSyncRecover()
 	assertStateIDUpdate()
 	setStoreState(cluster, "up", "up", "up", "up", "up", "up")
 	cluster.AddLeaderRegion(1, 1, 2, 3, 4, 5)
@@ -409,7 +411,7 @@ func TestReplicateState(t *testing.T) {
 	rep.tickReplicateStatus()
 	assertLastData(t, replicator.lastData[1], "sync", stateID, nil)
 
-	// replicate state to new member
+	// repliate state to new member
 	replicator.memberIDs = append(replicator.memberIDs, 2, 3)
 	rep.tickReplicateStatus()
 	assertLastData(t, replicator.lastData[2], "sync", stateID, nil)
@@ -498,7 +500,7 @@ func TestRecoverProgress(t *testing.T) {
 	re.NoError(err)
 
 	prepare := func(n int, asyncRegions []int) {
-		re.NoError(rep.drSwitchToSyncRecover())
+		rep.drSwitchToSyncRecover()
 		regions := genRegions(cluster, rep.drAutoSync.StateID, n)
 		for _, i := range asyncRegions {
 			regions[i] = regions[i].Clone(core.SetReplicationStatus(&pb.RegionReplicationStatus{
@@ -563,7 +565,7 @@ func TestRecoverProgressWithSplitAndMerge(t *testing.T) {
 	re.NoError(err)
 
 	prepare := func(n int, asyncRegions []int) {
-		re.NoError(rep.drSwitchToSyncRecover())
+		rep.drSwitchToSyncRecover()
 		regions := genRegions(cluster, rep.drAutoSync.StateID, n)
 		for _, i := range asyncRegions {
 			regions[i] = regions[i].Clone(core.SetReplicationStatus(&pb.RegionReplicationStatus{

@@ -27,16 +27,15 @@ import (
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/storage/endpoint"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
-	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/tsoutil"
-	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 // GetGCSafePointV2 return gc safe point for the given keyspace.
 func (s *GrpcServer) GetGCSafePointV2(ctx context.Context, request *pdpb.GetGCSafePointV2Request) (*pdpb.GetGCSafePointV2Response, error) {
-	fn := func(ctx context.Context, client *grpc.ClientConn) (any, error) {
+	fn := func(ctx context.Context, client *grpc.ClientConn) (interface{}, error) {
 		return pdpb.NewPDClient(client).GetGCSafePointV2(ctx, request)
 	}
 	if rsp, err := s.unaryMiddleware(ctx, request, fn); err != nil {
@@ -49,19 +48,19 @@ func (s *GrpcServer) GetGCSafePointV2(ctx context.Context, request *pdpb.GetGCSa
 
 	if err != nil {
 		return &pdpb.GetGCSafePointV2Response{
-			Header: wrapErrorToHeader(pdpb.ErrorType_UNKNOWN, err.Error()),
+			Header: s.wrapErrorToHeader(pdpb.ErrorType_UNKNOWN, err.Error()),
 		}, err
 	}
 
 	return &pdpb.GetGCSafePointV2Response{
-		Header:    wrapHeader(),
+		Header:    s.header(),
 		SafePoint: safePoint.SafePoint,
 	}, nil
 }
 
 // UpdateGCSafePointV2 update gc safe point for the given keyspace.
 func (s *GrpcServer) UpdateGCSafePointV2(ctx context.Context, request *pdpb.UpdateGCSafePointV2Request) (*pdpb.UpdateGCSafePointV2Response, error) {
-	fn := func(ctx context.Context, client *grpc.ClientConn) (any, error) {
+	fn := func(ctx context.Context, client *grpc.ClientConn) (interface{}, error) {
 		return pdpb.NewPDClient(client).UpdateGCSafePointV2(ctx, request)
 	}
 	if rsp, err := s.unaryMiddleware(ctx, request, fn); err != nil {
@@ -91,14 +90,14 @@ func (s *GrpcServer) UpdateGCSafePointV2(ctx context.Context, request *pdpb.Upda
 	}
 
 	return &pdpb.UpdateGCSafePointV2Response{
-		Header:       wrapHeader(),
+		Header:       s.header(),
 		NewSafePoint: newSafePoint,
 	}, nil
 }
 
 // UpdateServiceSafePointV2 update service safe point for the given keyspace.
 func (s *GrpcServer) UpdateServiceSafePointV2(ctx context.Context, request *pdpb.UpdateServiceSafePointV2Request) (*pdpb.UpdateServiceSafePointV2Response, error) {
-	fn := func(ctx context.Context, client *grpc.ClientConn) (any, error) {
+	fn := func(ctx context.Context, client *grpc.ClientConn) (interface{}, error) {
 		return pdpb.NewPDClient(client).UpdateServiceSafePointV2(ctx, request)
 	}
 	if rsp, err := s.unaryMiddleware(ctx, request, fn); err != nil {
@@ -133,7 +132,7 @@ func (s *GrpcServer) UpdateServiceSafePointV2(ctx context.Context, request *pdpb
 		return nil, err
 	}
 	return &pdpb.UpdateServiceSafePointV2Response{
-		Header:       wrapHeader(),
+		Header:       s.header(),
 		ServiceId:    []byte(minServiceSafePoint.ServiceID),
 		Ttl:          minServiceSafePoint.ExpiredAt - now.Unix(),
 		MinSafePoint: minServiceSafePoint.SafePoint,
@@ -149,7 +148,7 @@ func (s *GrpcServer) WatchGCSafePointV2(request *pdpb.WatchGCSafePointV2Request,
 	// - If required revision < CompactRevision, we need to reload all configs to avoid losing data.
 	// - If required revision >= CompactRevision, just keep watching.
 	// Use WithPrevKV() to get the previous key-value pair when get Delete Event.
-	watchChan := s.client.Watch(ctx, path.Join(s.rootPath, keypath.GCSafePointV2Prefix()), clientv3.WithRev(revision), clientv3.WithPrefix())
+	watchChan := s.client.Watch(ctx, path.Join(s.rootPath, endpoint.GCSafePointV2Prefix()), clientv3.WithRev(revision), clientv3.WithPrefix())
 	for {
 		select {
 		case <-ctx.Done():
@@ -158,10 +157,10 @@ func (s *GrpcServer) WatchGCSafePointV2(request *pdpb.WatchGCSafePointV2Request,
 			if res.Err() != nil {
 				var resp pdpb.WatchGCSafePointV2Response
 				if revision < res.CompactRevision {
-					resp.Header = wrapErrorToHeader(pdpb.ErrorType_DATA_COMPACTED,
+					resp.Header = s.wrapErrorToHeader(pdpb.ErrorType_DATA_COMPACTED,
 						fmt.Sprintf("required watch revision: %d is smaller than current compact/min revision %d.", revision, res.CompactRevision))
 				} else {
-					resp.Header = wrapErrorToHeader(pdpb.ErrorType_UNKNOWN,
+					resp.Header = s.wrapErrorToHeader(pdpb.ErrorType_UNKNOWN,
 						fmt.Sprintf("watch channel meet other error %s.", res.Err().Error()))
 				}
 				if err := stream.Send(&resp); err != nil {
@@ -185,7 +184,7 @@ func (s *GrpcServer) WatchGCSafePointV2(request *pdpb.WatchGCSafePointV2Request,
 				})
 			}
 			if len(safePointEvents) > 0 {
-				if err := stream.Send(&pdpb.WatchGCSafePointV2Response{Header: wrapHeader(), Events: safePointEvents, Revision: res.Header.GetRevision()}); err != nil {
+				if err := stream.Send(&pdpb.WatchGCSafePointV2Response{Header: s.header(), Events: safePointEvents, Revision: res.Header.GetRevision()}); err != nil {
 					return err
 				}
 			}
@@ -195,7 +194,7 @@ func (s *GrpcServer) WatchGCSafePointV2(request *pdpb.WatchGCSafePointV2Request,
 
 // GetAllGCSafePointV2 return all gc safe point v2.
 func (s *GrpcServer) GetAllGCSafePointV2(ctx context.Context, request *pdpb.GetAllGCSafePointV2Request) (*pdpb.GetAllGCSafePointV2Response, error) {
-	fn := func(ctx context.Context, client *grpc.ClientConn) (any, error) {
+	fn := func(ctx context.Context, client *grpc.ClientConn) (interface{}, error) {
 		return pdpb.NewPDClient(client).GetAllGCSafePointV2(ctx, request)
 	}
 	if rsp, err := s.unaryMiddleware(ctx, request, fn); err != nil {
@@ -204,9 +203,9 @@ func (s *GrpcServer) GetAllGCSafePointV2(ctx context.Context, request *pdpb.GetA
 		return rsp.(*pdpb.GetAllGCSafePointV2Response), err
 	}
 
-	startkey := keypath.GCSafePointV2Prefix()
+	startkey := endpoint.GCSafePointV2Prefix()
 	endkey := clientv3.GetPrefixRangeEnd(startkey)
-	_, values, revision, err := s.loadRangeFromEtcd(startkey, endkey)
+	_, values, revision, err := s.loadRangeFromETCD(startkey, endkey)
 
 	gcSafePoints := make([]*pdpb.GCSafePointV2, 0, len(values))
 	for _, value := range values {
@@ -226,18 +225,18 @@ func (s *GrpcServer) GetAllGCSafePointV2(ctx context.Context, request *pdpb.GetA
 
 	if err != nil {
 		return &pdpb.GetAllGCSafePointV2Response{
-			Header: wrapErrorToHeader(pdpb.ErrorType_UNKNOWN, err.Error()),
+			Header: s.wrapErrorToHeader(pdpb.ErrorType_UNKNOWN, err.Error()),
 		}, err
 	}
 
 	return &pdpb.GetAllGCSafePointV2Response{
-		Header:       wrapHeader(),
+		Header:       s.header(),
 		GcSafePoints: gcSafePoints,
 		Revision:     revision,
 	}, nil
 }
 
-func (s *GrpcServer) loadRangeFromEtcd(startKey, endKey string) ([]string, []string, int64, error) {
+func (s *GrpcServer) loadRangeFromETCD(startKey, endKey string) ([]string, []string, int64, error) {
 	startKey = strings.Join([]string{s.rootPath, startKey}, "/")
 	var opOption []clientv3.OpOption
 	if endKey == "\x00" {

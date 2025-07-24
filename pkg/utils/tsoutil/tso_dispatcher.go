@@ -21,13 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/errs"
-	"github.com/tikv/pd/pkg/timerpool"
 	"github.com/tikv/pd/pkg/utils/etcdutil"
 	"github.com/tikv/pd/pkg/utils/logutil"
+	"github.com/tikv/pd/pkg/utils/timerutil"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -73,10 +74,10 @@ func (s *TSODispatcher) DispatchRequest(serverCtx context.Context, req Request, 
 	key := req.getForwardedHost()
 	val, loaded := s.dispatchChs.Load(key)
 	if !loaded {
-		val = tsoRequestProxyQueue{requestCh: make(chan Request, maxMergeRequests+1)}
+		val = &tsoRequestProxyQueue{requestCh: make(chan Request, maxMergeRequests+1)}
 		val, loaded = s.dispatchChs.LoadOrStore(key, val)
 	}
-	tsoQueue := val.(tsoRequestProxyQueue)
+	tsoQueue := val.(*tsoRequestProxyQueue)
 	if !loaded {
 		log.Info("start new tso proxy dispatcher", zap.String("forwarded-host", req.getForwardedHost()))
 		tsDeadlineCh := make(chan *TSDeadline, 1)
@@ -91,7 +92,7 @@ func (s *TSODispatcher) DispatchRequest(serverCtx context.Context, req Request, 
 }
 
 func (s *TSODispatcher) dispatch(
-	tsoQueue tsoRequestProxyQueue,
+	tsoQueue *tsoRequestProxyQueue,
 	tsoProtoFactory ProtoFactory,
 	forwardedHost string,
 	clientConn *grpc.ClientConn,
@@ -102,6 +103,10 @@ func (s *TSODispatcher) dispatch(
 	defer s.dispatchChs.Delete(forwardedHost)
 
 	forwardStream, cancel, err := tsoProtoFactory.createForwardStream(tsoQueue.ctx, clientConn)
+	failpoint.Inject("canNotCreateForwardStream", func() {
+		cancel()
+		err = errors.New("canNotCreateForwardStream")
+	})
 	if err != nil || forwardStream == nil {
 		log.Error("create tso forwarding stream error",
 			zap.String("forwarded-host", forwardedHost),
@@ -120,6 +125,10 @@ func (s *TSODispatcher) dispatch(
 	noProxyRequestsTimer := time.NewTimer(tsoProxyStreamIdleTimeout)
 	for {
 		noProxyRequestsTimer.Reset(tsoProxyStreamIdleTimeout)
+		failpoint.Inject("tsoProxyStreamIdleTimeout", func() {
+			noProxyRequestsTimer.Reset(0)
+			<-tsoQueue.requestCh // consume the request so that the select below results in the idle case
+		})
 		select {
 		case first := <-tsoQueue.requestCh:
 			pendingTSOReqCount := len(tsoQueue.requestCh) + 1
@@ -134,7 +143,7 @@ func (s *TSODispatcher) dispatch(
 			case <-dispatcherCtx.Done():
 				return
 			}
-			err = s.processRequests(forwardStream, requests[:pendingTSOReqCount])
+			err = s.processRequests(forwardStream, requests[:pendingTSOReqCount], tsoProtoFactory)
 			close(done)
 			if err != nil {
 				log.Error("proxy forward tso error",
@@ -156,7 +165,7 @@ func (s *TSODispatcher) dispatch(
 	}
 }
 
-func (s *TSODispatcher) processRequests(forwardStream stream, requests []Request) error {
+func (s *TSODispatcher) processRequests(forwardStream stream, requests []Request, tsoProtoFactory ProtoFactory) error {
 	// Merge the requests
 	count := uint32(0)
 	for _, request := range requests {
@@ -164,7 +173,7 @@ func (s *TSODispatcher) processRequests(forwardStream stream, requests []Request
 	}
 
 	start := time.Now()
-	resp, err := requests[0].process(forwardStream, count)
+	resp, err := requests[0].process(forwardStream, count, tsoProtoFactory)
 	if err != nil {
 		return err
 	}
@@ -185,9 +194,9 @@ func addLogical(logical, count int64, suffixBits uint32) int64 {
 	return logical + count<<suffixBits
 }
 
-func (*TSODispatcher) finishRequest(requests []Request, physical, firstLogical int64, suffixBits uint32) error {
+func (s *TSODispatcher) finishRequest(requests []Request, physical, firstLogical int64, suffixBits uint32) error {
 	countSum := int64(0)
-	for i := range requests {
+	for i := 0; i < len(requests); i++ {
 		newCountSum, err := requests[i].postProcess(countSum, physical, firstLogical, suffixBits)
 		if err != nil {
 			return err
@@ -210,7 +219,7 @@ func NewTSDeadline(
 	done chan struct{},
 	cancel context.CancelFunc,
 ) *TSDeadline {
-	timer := timerpool.GlobalTimerPool.Get(timeout)
+	timer := timerutil.GlobalTimerPool.Get(timeout)
 	return &TSDeadline{
 		timer:  timer,
 		done:   done,
@@ -229,11 +238,11 @@ func WatchTSDeadline(ctx context.Context, tsDeadlineCh <-chan *TSDeadline) {
 				log.Warn("tso proxy request processing is canceled due to timeout",
 					errs.ZapError(errs.ErrProxyTSOTimeout))
 				d.cancel()
-				timerpool.GlobalTimerPool.Put(d.timer)
+				timerutil.GlobalTimerPool.Put(d.timer)
 			case <-d.done:
-				timerpool.GlobalTimerPool.Put(d.timer)
+				timerutil.GlobalTimerPool.Put(d.timer)
 			case <-ctx.Done():
-				timerpool.GlobalTimerPool.Put(d.timer)
+				timerutil.GlobalTimerPool.Put(d.timer)
 				return
 			}
 		case <-ctx.Done():

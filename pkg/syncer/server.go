@@ -18,7 +18,6 @@ import (
 	"context"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/docker/go-units"
@@ -33,7 +32,6 @@ import (
 	"github.com/tikv/pd/pkg/storage"
 	"github.com/tikv/pd/pkg/storage/kv"
 	"github.com/tikv/pd/pkg/utils/grpcutil"
-	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"github.com/tikv/pd/pkg/utils/syncutil"
 	"go.uber.org/zap"
@@ -63,6 +61,7 @@ type ServerStream interface {
 // Server is the abstraction of the syncer storage server.
 type Server interface {
 	LoopContext() context.Context
+	ClusterID() uint64
 	GetMemberInfo() *pdpb.Member
 	GetLeader() *pdpb.Member
 	GetStorage() storage.Storage
@@ -85,20 +84,21 @@ type RegionSyncer struct {
 	history   *historyBuffer
 	limit     *ratelimit.RateLimiter
 	tlsConfig *grpcutil.TLSConfig
-	// status when as client
-	streamingRunning atomic.Bool
 }
 
-// NewRegionSyncer returns a region syncer that ensures final consistency through the heartbeat,
-// but it does not guarantee strong consistency. Using the same storage backend of the region storage.
+// NewRegionSyncer returns a region syncer.
+// The final consistency is ensured by the heartbeat.
+// Strong consistency is not guaranteed.
+// Usually open the region syncer in huge cluster and the server
+// no longer etcd but go-leveldb.
 func NewRegionSyncer(s Server) *RegionSyncer {
-	regionStorage := storage.RetrieveRegionStorage(s.GetStorage())
-	if regionStorage == nil {
+	localRegionStorage := storage.TryGetLocalRegionStorage(s.GetStorage())
+	if localRegionStorage == nil {
 		return nil
 	}
 	syncer := &RegionSyncer{
 		server:    s,
-		history:   newHistoryBuffer(defaultHistoryBufferSize, regionStorage.(kv.Base)),
+		history:   newHistoryBuffer(defaultHistoryBufferSize, localRegionStorage.(kv.Base)),
 		limit:     ratelimit.NewRateLimiter(defaultBucketRate, defaultBucketCapacity),
 		tlsConfig: s.GetTLSConfig(),
 	}
@@ -137,8 +137,8 @@ func (s *RegionSyncer) RunServer(ctx context.Context, regionNotifier <-chan *cor
 			}
 			buckets = append(buckets, bucket)
 			leaders = append(leaders, first.GetLeader())
-			startIndex := s.history.getNextIndex()
-			s.history.record(first)
+			startIndex := s.history.GetNextIndex()
+			s.history.Record(first)
 			pending := len(regionNotifier)
 			for i := 0; i < pending && i < maxSyncRegionBatchSize; i++ {
 				region := <-regionNotifier
@@ -151,10 +151,10 @@ func (s *RegionSyncer) RunServer(ctx context.Context, regionNotifier <-chan *cor
 				}
 				buckets = append(buckets, bucket)
 				leaders = append(leaders, region.GetLeader())
-				s.history.record(region)
+				s.history.Record(region)
 			}
 			regions := &pdpb.SyncRegionResponse{
-				Header:        &pdpb.ResponseHeader{ClusterId: keypath.ClusterID()},
+				Header:        &pdpb.ResponseHeader{ClusterId: s.server.ClusterID()},
 				Regions:       requests,
 				StartIndex:    startIndex,
 				RegionStats:   stats,
@@ -164,8 +164,8 @@ func (s *RegionSyncer) RunServer(ctx context.Context, regionNotifier <-chan *cor
 			s.broadcast(ctx, regions)
 		case <-ticker.C:
 			alive := &pdpb.SyncRegionResponse{
-				Header:     &pdpb.ResponseHeader{ClusterId: keypath.ClusterID()},
-				StartIndex: s.history.getNextIndex(),
+				Header:     &pdpb.ResponseHeader{ClusterId: s.server.ClusterID()},
+				StartIndex: s.history.GetNextIndex(),
 			}
 			s.broadcast(ctx, alive)
 		}
@@ -206,8 +206,8 @@ func (s *RegionSyncer) Sync(ctx context.Context, stream pdpb.PD_SyncRegionsServe
 			return errors.WithStack(err)
 		}
 		clusterID := request.GetHeader().GetClusterId()
-		if clusterID != keypath.ClusterID() {
-			return status.Errorf(codes.FailedPrecondition, "mismatch cluster id, need %d but got %d", keypath.ClusterID(), clusterID)
+		if clusterID != s.server.ClusterID() {
+			return status.Errorf(codes.FailedPrecondition, "mismatch cluster id, need %d but got %d", s.server.ClusterID(), clusterID)
 		}
 		log.Info("establish sync region stream",
 			zap.String("requested-server", request.GetMember().GetName()),
@@ -224,21 +224,12 @@ func (s *RegionSyncer) Sync(ctx context.Context, stream pdpb.PD_SyncRegionsServe
 func (s *RegionSyncer) syncHistoryRegion(ctx context.Context, request *pdpb.SyncRegionRequest, stream pdpb.PD_SyncRegionsServer) error {
 	startIndex := request.GetStartIndex()
 	name := request.GetMember().GetName()
-	records := s.history.recordsFrom(startIndex)
+	records := s.history.RecordsFrom(startIndex)
 	if len(records) == 0 {
-		if s.history.getNextIndex() == startIndex {
+		if s.history.GetNextIndex() == startIndex {
 			log.Info("requested server has already in sync with server",
 				zap.String("requested-server", name), zap.String("server", s.server.Name()), zap.Uint64("last-index", startIndex))
-			// still send a response to follower to show the history region sync.
-			resp := &pdpb.SyncRegionResponse{
-				Header:        &pdpb.ResponseHeader{ClusterId: keypath.ClusterID()},
-				Regions:       nil,
-				StartIndex:    startIndex,
-				RegionStats:   nil,
-				RegionLeaders: nil,
-				Buckets:       nil,
-			}
-			return stream.Send(resp)
+			return nil
 		}
 		// do full synchronization
 		if startIndex == 0 {
@@ -276,17 +267,14 @@ func (s *RegionSyncer) syncHistoryRegion(ctx context.Context, request *pdpb.Sync
 					continue
 				}
 				resp := &pdpb.SyncRegionResponse{
-					Header:        &pdpb.ResponseHeader{ClusterId: keypath.ClusterID()},
+					Header:        &pdpb.ResponseHeader{ClusterId: s.server.ClusterID()},
 					Regions:       metas,
 					StartIndex:    uint64(lastIndex),
 					RegionStats:   stats,
 					RegionLeaders: leaders,
 					Buckets:       buckets,
 				}
-				if err := s.limit.WaitN(ctx, resp.Size()); err != nil {
-					log.Error("failed to wait rate limit", errs.ZapError(err))
-					return err
-				}
+				s.limit.WaitN(ctx, resp.Size())
 				lastIndex += len(metas)
 				if err := stream.Send(resp); err != nil {
 					log.Error("failed to send sync region response", errs.ZapError(errs.ErrGRPCSend, err))
@@ -307,7 +295,7 @@ func (s *RegionSyncer) syncHistoryRegion(ctx context.Context, request *pdpb.Sync
 	log.Info("sync the history regions with server",
 		zap.String("server", name),
 		zap.Uint64("from-index", startIndex),
-		zap.Uint64("last-index", s.history.getNextIndex()),
+		zap.Uint64("last-index", s.history.GetNextIndex()),
 		zap.Int("records-length", len(records)))
 	regions := make([]*metapb.Region, len(records))
 	stats := make([]*pdpb.RegionStat, len(records))
@@ -328,7 +316,7 @@ func (s *RegionSyncer) syncHistoryRegion(ctx context.Context, request *pdpb.Sync
 		}
 	}
 	resp := &pdpb.SyncRegionResponse{
-		Header:        &pdpb.ResponseHeader{ClusterId: keypath.ClusterID()},
+		Header:        &pdpb.ResponseHeader{ClusterId: s.server.ClusterID()},
 		Regions:       regions,
 		StartIndex:    startIndex,
 		RegionStats:   stats,

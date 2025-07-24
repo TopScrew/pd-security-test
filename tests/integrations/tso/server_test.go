@@ -25,9 +25,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	tso "github.com/tikv/pd/pkg/mcs/tso/server"
 	tsopkg "github.com/tikv/pd/pkg/tso"
-	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/tempurl"
-	tu "github.com/tikv/pd/pkg/utils/testutil"
+	pd "github.com/tikv/pd/pkg/utils/testutil"
 	"github.com/tikv/pd/tests"
 	"google.golang.org/grpc"
 )
@@ -78,12 +77,10 @@ func (suite *tsoServerTestSuite) SetupSuite() {
 	err = suite.cluster.RunInitialServers()
 	re.NoError(err)
 	leaderName := suite.cluster.WaitLeader()
-	re.NotEmpty(leaderName)
 	suite.pdLeaderServer = suite.cluster.GetServer(leaderName)
-	suite.pdLeaderServer.BootstrapCluster()
 	backendEndpoints := suite.pdLeaderServer.GetAddr()
 	if suite.legacy {
-		suite.pdClient = tu.MustNewGrpcClient(re, backendEndpoints)
+		suite.pdClient = pd.MustNewGrpcClient(re, backendEndpoints)
 	} else {
 		suite.tsoServer, suite.tsoServerCleanup = tests.StartSingleTSOTestServer(suite.ctx, re, backendEndpoints, tempurl.Alloc())
 		suite.tsoClientConn, suite.tsoClient = tso.MustNewGrpcClient(re, suite.tsoServer.GetAddr())
@@ -97,6 +94,13 @@ func (suite *tsoServerTestSuite) TearDownSuite() {
 		suite.tsoServerCleanup()
 	}
 	suite.cluster.Destroy()
+}
+
+func (suite *tsoServerTestSuite) getClusterID() uint64 {
+	if suite.legacy {
+		return suite.pdLeaderServer.GetServer().ClusterID()
+	}
+	return suite.tsoServer.ClusterID()
 }
 
 func (suite *tsoServerTestSuite) resetTS(ts uint64, ignoreSmaller, skipUpperBoundCheck bool) {
@@ -114,7 +118,7 @@ func (suite *tsoServerTestSuite) resetTS(ts uint64, ignoreSmaller, skipUpperBoun
 
 func (suite *tsoServerTestSuite) request(ctx context.Context, count uint32) (err error) {
 	re := suite.Require()
-	clusterID := keypath.ClusterID()
+	clusterID := suite.getClusterID()
 	if suite.legacy {
 		req := &pdpb.TsoRequest{
 			Header:     &pdpb.RequestHeader{ClusterId: clusterID},
@@ -145,15 +149,15 @@ func (suite *tsoServerTestSuite) TestConcurrentlyReset() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	now := time.Now()
-	for range 2 {
+	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			for j := 0; j <= 50; j++ {
+			for j := 0; j <= 100; j++ {
 				// Get a copy of now then call base.add, because now is shared by all goroutines
 				// and now.add() will add to itself which isn't atomic and multi-goroutine safe.
 				base := now
-				physical := base.Add(time.Duration(j)*time.Minute).UnixNano() / int64(time.Millisecond)
-				ts := uint64(physical) << 18
+				physical := base.Add(time.Duration(2*j)*time.Minute).UnixNano() / int64(time.Millisecond)
+				ts := uint64(physical << 18)
 				suite.resetTS(ts, false, false)
 			}
 		}()

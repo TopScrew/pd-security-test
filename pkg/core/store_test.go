@@ -62,7 +62,7 @@ func TestDistinctScore(t *testing.T) {
 	re.Equal(float64(0), DistinctScore(labels, stores, store))
 }
 
-func TestCloneStore(_ *testing.T) {
+func TestCloneStore(t *testing.T) {
 	meta := &metapb.Store{Id: 1, Address: "mock://tikv-1", Labels: []*metapb.StoreLabel{{Key: "zone", Value: "z1"}, {Key: "host", Value: "h1"}}}
 	store := NewStoreInfo(meta)
 	start := time.Now()
@@ -262,31 +262,4 @@ func newStoreInfoWithDisk(id, used, available, capacity, regionSize uint64) *Sto
 		SetRegionSize(int64(regionSize)),
 	)
 	return store
-}
-
-func TestPutStore(t *testing.T) {
-	store := newStoreInfoWithAvailable(1, 20*units.GiB, 100*units.GiB, 1.4)
-	storesInfo := NewStoresInfo()
-	storesInfo.PutStore(store)
-	re := require.New(t)
-	re.Equal(store, storesInfo.GetStore(store.GetID()))
-
-	opts := []StoreCreateOption{SetStoreState(metapb.StoreState_Up)}
-	store = store.Clone(opts...)
-	re.NotEqual(store, storesInfo.GetStore(store.GetID()))
-	storesInfo.PutStore(store, opts...)
-	re.Equal(store, storesInfo.GetStore(store.GetID()))
-
-	opts = []StoreCreateOption{
-		SetStoreStats(&pdpb.StoreStats{
-			Capacity:  100 * units.GiB,
-			Available: 20 * units.GiB,
-			UsedSize:  80 * units.GiB,
-		}),
-		SetLastHeartbeatTS(time.Now()),
-	}
-	store = store.Clone(opts...)
-	re.NotEqual(store, storesInfo.GetStore(store.GetID()))
-	storesInfo.PutStore(store, opts...)
-	re.Equal(store, storesInfo.GetStore(store.GetID()))
 }

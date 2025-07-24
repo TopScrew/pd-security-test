@@ -31,13 +31,13 @@ func TestPatchResourceGroup(t *testing.T) {
 		re.NoError(err)
 		err = rg.PatchSettings(patch)
 		re.NoError(err)
-		res, err := json.Marshal(rg.Clone(false))
+		res, err := json.Marshal(rg.Clone())
 		re.NoError(err)
 		re.Equal(ca.expectJSONString, string(res))
 	}
 }
 
-func resetSizeCache(obj any) {
+func resetSizeCache(obj interface{}) {
 	resetSizeCacheRecursive(reflect.ValueOf(obj))
 }
 
@@ -50,7 +50,7 @@ func resetSizeCacheRecursive(value reflect.Value) {
 		return
 	}
 
-	for i := range value.NumField() {
+	for i := 0; i < value.NumField(); i++ {
 		fieldValue := value.Field(i)
 		fieldType := value.Type().Field(i)
 
@@ -68,7 +68,7 @@ func TestClone(t *testing.T) {
 		gofakeit.Struct(&rg)
 		// hack to reset XXX_sizecache, gofakeit will random set this field but proto clone will not copy this field.
 		resetSizeCache(&rg)
-		rgClone := rg.Clone(true)
+		rgClone := rg.Clone()
 		require.EqualValues(t, &rg, rgClone)
 	}
 }

@@ -21,7 +21,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +58,7 @@ func (m *MockPackHotRegionInfo) IsLeader() bool {
 
 // GenHistoryHotRegions generate history hot region for test.
 func (m *MockPackHotRegionInfo) GenHistoryHotRegions(num int, updateTime time.Time) {
-	for i := range num {
+	for i := 0; i < num; i++ {
 		historyHotRegion := HistoryHotRegion{
 			UpdateTime:    updateTime.UnixNano() / int64(time.Millisecond),
 			RegionID:      uint64(i),
@@ -173,14 +172,14 @@ func TestHotRegionWrite(t *testing.T) {
 func TestHotRegionDelete(t *testing.T) {
 	re := require.New(t)
 	defaultRemainDay := 7
-	defaultDeleteData := 30
+	defaultDelteData := 30
 	deleteDate := time.Now().AddDate(0, 0, 0)
 	packHotRegionInfo := &MockPackHotRegionInfo{}
 	store, clean, err := newTestHotRegionStorage(10*time.Minute, uint64(defaultRemainDay), packHotRegionInfo)
 	re.NoError(err)
 	defer clean()
 	historyHotRegions := make([]HistoryHotRegion, 0)
-	for range defaultDeleteData {
+	for i := 0; i < defaultDelteData; i++ {
 		historyHotRegion := HistoryHotRegion{
 			UpdateTime:    deleteDate.UnixNano() / int64(time.Millisecond),
 			RegionID:      1,
@@ -273,7 +272,7 @@ func BenchmarkRead(b *testing.B) {
 }
 
 func newTestHotRegions(storage *HotRegionStorage, mock *MockPackHotRegionInfo, cycleTimes, num int, updateTime time.Time) time.Time {
-	for range cycleTimes {
+	for i := 0; i < cycleTimes; i++ {
 		mock.GenHistoryHotRegions(num, updateTime)
 		storage.pullHotRegionInfo()
 		storage.flush()
@@ -288,7 +287,7 @@ func newTestHotRegionStorage(pullInterval time.Duration,
 	packHotRegionInfo *MockPackHotRegionInfo) (
 	hotRegionStorage *HotRegionStorage,
 	clear func(), err error) {
-	writePath := strings.Join([]string{".", "tmp"}, string(filepath.Separator))
+	writePath := "./tmp"
 	ctx := context.Background()
 	packHotRegionInfo.pullInterval = pullInterval
 	packHotRegionInfo.reservedDays = reservedDays

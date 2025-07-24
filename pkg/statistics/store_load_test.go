@@ -16,7 +16,6 @@ package statistics
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/pd/pkg/core/constant"
@@ -25,7 +24,8 @@ import (
 
 func TestHistoryLoads(t *testing.T) {
 	re := require.New(t)
-	historyLoads := NewStoreHistoryLoads(utils.DimLen, DefaultHistorySampleDuration, 0)
+	historySampleInterval = 0
+	historyLoads := NewStoreHistoryLoads(utils.DimLen)
 	loads := []float64{1.0, 2.0, 3.0}
 	rwTp := utils.Read
 	kind := constant.LeaderKind
@@ -33,30 +33,14 @@ func TestHistoryLoads(t *testing.T) {
 	re.Len(historyLoads.Get(1, rwTp, kind)[0], 10)
 
 	expectLoads := make([][]float64, utils.DimLen)
-	for i := range loads {
+	for i := 0; i < len(loads); i++ {
 		expectLoads[i] = make([]float64, 10)
 	}
-	for i := range 10 {
+	for i := 0; i < 10; i++ {
 		historyLoads.Add(1, rwTp, kind, loads)
 		expectLoads[utils.ByteDim][i] = 1.0
 		expectLoads[utils.KeyDim][i] = 2.0
 		expectLoads[utils.QueryDim][i] = 3.0
 	}
 	re.EqualValues(expectLoads, historyLoads.Get(1, rwTp, kind))
-
-	historyLoads = NewStoreHistoryLoads(utils.DimLen, time.Millisecond, time.Millisecond)
-	historyLoads.Add(1, rwTp, kind, loads)
-	re.Len(historyLoads.Get(1, rwTp, kind)[0], 1)
-
-	historyLoads = NewStoreHistoryLoads(utils.DimLen, time.Millisecond, time.Second)
-	historyLoads.Add(1, rwTp, kind, loads)
-	re.Empty(historyLoads.Get(1, rwTp, kind)[0])
-
-	historyLoads = NewStoreHistoryLoads(utils.DimLen, 0, time.Second)
-	historyLoads.Add(1, rwTp, kind, loads)
-	re.Empty(historyLoads.Get(1, rwTp, kind)[0])
-
-	historyLoads = NewStoreHistoryLoads(utils.DimLen, 0, 0)
-	historyLoads.Add(1, rwTp, kind, loads)
-	re.Empty(historyLoads.Get(1, rwTp, kind)[0])
 }

@@ -22,6 +22,7 @@ import (
 )
 
 func TestBalancerPutAndDelete(t *testing.T) {
+	t.Parallel()
 	re := require.New(t)
 	balancers := []Balancer[uint32]{
 		NewRoundRobin[uint32](),
@@ -30,7 +31,7 @@ func TestBalancerPutAndDelete(t *testing.T) {
 		re.Equal(uint32(0), balancer.Next())
 		// test put
 		exists := make(map[uint32]struct{})
-		for range 100 {
+		for i := 0; i < 100; i++ {
 			num := rand.Uint32()
 			balancer.Put(num)
 			exists[num] = struct{}{}
@@ -55,12 +56,13 @@ func TestBalancerPutAndDelete(t *testing.T) {
 }
 
 func TestBalancerDuplicate(t *testing.T) {
+	t.Parallel()
 	re := require.New(t)
 	balancers := []Balancer[uint32]{
 		NewRoundRobin[uint32](),
 	}
 	for _, balancer := range balancers {
-		re.Empty(balancer.GetAll())
+		re.Len(balancer.GetAll(), 0)
 		// test duplicate put
 		balancer.Put(1)
 		re.Len(balancer.GetAll(), 1)
@@ -68,21 +70,22 @@ func TestBalancerDuplicate(t *testing.T) {
 		re.Len(balancer.GetAll(), 1)
 		// test duplicate delete
 		balancer.Delete(1)
-		re.Empty(balancer.GetAll())
+		re.Len(balancer.GetAll(), 0)
 		balancer.Delete(1)
-		re.Empty(balancer.GetAll())
+		re.Len(balancer.GetAll(), 0)
 	}
 }
 
 func TestRoundRobin(t *testing.T) {
+	t.Parallel()
 	re := require.New(t)
 	balancer := NewRoundRobin[uint32]()
-	for range 100 {
+	for i := 0; i < 100; i++ {
 		num := rand.Uint32()
 		balancer.Put(num)
 	}
 	statistics := make(map[uint32]int)
-	for range 1000 {
+	for i := 0; i < 1000; i++ {
 		statistics[balancer.Next()]++
 	}
 	min := 1000

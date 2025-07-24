@@ -2,14 +2,11 @@ package server
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/failpoint"
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/kvproto/pkg/schedulingpb"
 	"github.com/pingcap/log"
@@ -17,23 +14,18 @@ import (
 	"github.com/tikv/pd/pkg/core"
 	"github.com/tikv/pd/pkg/errs"
 	"github.com/tikv/pd/pkg/mcs/scheduling/server/config"
-	"github.com/tikv/pd/pkg/ratelimit"
 	"github.com/tikv/pd/pkg/schedule"
 	sc "github.com/tikv/pd/pkg/schedule/config"
 	"github.com/tikv/pd/pkg/schedule/hbstream"
 	"github.com/tikv/pd/pkg/schedule/labeler"
 	"github.com/tikv/pd/pkg/schedule/operator"
 	"github.com/tikv/pd/pkg/schedule/placement"
-	"github.com/tikv/pd/pkg/schedule/scatter"
 	"github.com/tikv/pd/pkg/schedule/schedulers"
-	"github.com/tikv/pd/pkg/schedule/splitter"
-	"github.com/tikv/pd/pkg/schedule/types"
 	"github.com/tikv/pd/pkg/slice"
 	"github.com/tikv/pd/pkg/statistics"
 	"github.com/tikv/pd/pkg/statistics/buckets"
 	"github.com/tikv/pd/pkg/statistics/utils"
 	"github.com/tikv/pd/pkg/storage"
-	"github.com/tikv/pd/pkg/utils/keypath"
 	"github.com/tikv/pd/pkg/utils/logutil"
 	"go.uber.org/zap"
 )
@@ -54,45 +46,21 @@ type Cluster struct {
 	coordinator       *schedule.Coordinator
 	checkMembershipCh chan struct{}
 	apiServerLeader   atomic.Value
+	clusterID         uint64
 	running           atomic.Bool
-
-	// heartbeatRunner is used to process the subtree update task asynchronously.
-	heartbeatRunner ratelimit.Runner
-	// miscRunner is used to process the statistics and persistent tasks asynchronously.
-	miscRunner ratelimit.Runner
-	// logRunner is used to process the log asynchronously.
-	logRunner ratelimit.Runner
 }
 
-const (
-	regionLabelGCInterval = time.Hour
-	requestTimeout        = 3 * time.Second
-	collectWaitTime       = time.Minute
-
-	// heartbeat relative const
-	heartbeatTaskRunner = "heartbeat-task-runner"
-	miscTaskRunner      = "misc-task-runner"
-	logTaskRunner       = "log-task-runner"
-)
-
-var syncRunner = ratelimit.NewSyncRunner()
+const regionLabelGCInterval = time.Hour
 
 // NewCluster creates a new cluster.
-func NewCluster(
-	parentCtx context.Context,
-	persistConfig *config.PersistConfig,
-	storage storage.Storage,
-	basicCluster *core.BasicCluster,
-	hbStreams *hbstream.HeartbeatStreams,
-	checkMembershipCh chan struct{},
-) (*Cluster, error) {
+func NewCluster(parentCtx context.Context, persistConfig *config.PersistConfig, storage storage.Storage, basicCluster *core.BasicCluster, hbStreams *hbstream.HeartbeatStreams, clusterID uint64, checkMembershipCh chan struct{}) (*Cluster, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	labelerManager, err := labeler.NewRegionLabeler(ctx, storage, regionLabelGCInterval)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	ruleManager := placement.NewRuleManager(ctx, storage, basicCluster, persistConfig)
+	ruleManager := placement.NewRuleManager(storage, basicCluster, persistConfig)
 	c := &Cluster{
 		ctx:               ctx,
 		cancel:            cancel,
@@ -104,11 +72,8 @@ func NewCluster(
 		labelStats:        statistics.NewLabelStatistics(),
 		regionStats:       statistics.NewRegionStatistics(basicCluster, persistConfig, ruleManager),
 		storage:           storage,
+		clusterID:         clusterID,
 		checkMembershipCh: checkMembershipCh,
-
-		heartbeatRunner: ratelimit.NewConcurrentRunner(heartbeatTaskRunner, ratelimit.NewConcurrencyLimiter(uint64(runtime.NumCPU()*2)), time.Minute),
-		miscRunner:      ratelimit.NewConcurrentRunner(miscTaskRunner, ratelimit.NewConcurrencyLimiter(uint64(runtime.NumCPU()*2)), time.Minute),
-		logRunner:       ratelimit.NewConcurrentRunner(logTaskRunner, ratelimit.NewConcurrencyLimiter(uint64(runtime.NumCPU()*2)), time.Minute),
 	}
 	c.coordinator = schedule.NewCoordinator(ctx, c, hbStreams)
 	err = c.ruleManager.Initialize(persistConfig.GetMaxReplicas(), persistConfig.GetLocationLabels(), persistConfig.GetIsolationLevel())
@@ -165,16 +130,6 @@ func (c *Cluster) GetRegionLabeler() *labeler.RegionLabeler {
 	return c.labelerManager
 }
 
-// GetRegionSplitter returns the region splitter.
-func (c *Cluster) GetRegionSplitter() *splitter.RegionSplitter {
-	return c.coordinator.GetRegionSplitter()
-}
-
-// GetRegionScatterer returns the region scatter.
-func (c *Cluster) GetRegionScatterer() *scatter.RegionScatterer {
-	return c.coordinator.GetRegionScatterer()
-}
-
 // GetStoresLoads returns load stats of all stores.
 func (c *Cluster) GetStoresLoads() map[uint64][]float64 {
 	return c.hotStat.GetStoresLoads()
@@ -190,18 +145,21 @@ func (c *Cluster) GetHotPeerStat(rw utils.RWType, regionID, storeID uint64) *sta
 	return c.hotStat.GetHotPeerStat(rw, regionID, storeID)
 }
 
-// GetHotPeerStats returns the read or write statistics for hot regions.
-// It returns a map where the keys are store IDs and the values are slices of HotPeerStat.
+// RegionReadStats returns hot region's read stats.
 // The result only includes peers that are hot enough.
-// GetHotPeerStats is a thread-safe method.
-func (c *Cluster) GetHotPeerStats(rw utils.RWType) map[uint64][]*statistics.HotPeerStat {
-	threshold := c.persistConfig.GetHotRegionCacheHitsThreshold()
-	if rw == utils.Read {
-		// As read stats are reported by store heartbeat, the threshold needs to be adjusted.
-		threshold = c.persistConfig.GetHotRegionCacheHitsThreshold() *
-			(utils.RegionHeartBeatReportInterval / utils.StoreHeartBeatReportInterval)
-	}
-	return c.hotStat.GetHotPeerStats(rw, threshold)
+// RegionStats is a thread-safe method
+func (c *Cluster) RegionReadStats() map[uint64][]*statistics.HotPeerStat {
+	// As read stats are reported by store heartbeat, the threshold needs to be adjusted.
+	threshold := c.persistConfig.GetHotRegionCacheHitsThreshold() *
+		(utils.RegionHeartBeatReportInterval / utils.StoreHeartBeatReportInterval)
+	return c.hotStat.RegionStats(utils.Read, threshold)
+}
+
+// RegionWriteStats returns hot region's write stats.
+// The result only includes peers that are hot enough.
+func (c *Cluster) RegionWriteStats() map[uint64][]*statistics.HotPeerStat {
+	// RegionStats is a thread-safe method
+	return c.hotStat.RegionStats(utils.Write, c.persistConfig.GetHotRegionCacheHitsThreshold())
 }
 
 // BucketsStats returns hot region's buckets stats.
@@ -229,11 +187,9 @@ func (c *Cluster) AllocID() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, requestTimeout)
-	defer cancel()
-	resp, err := client.AllocID(ctx, &pdpb.AllocIDRequest{Header: &pdpb.RequestHeader{ClusterId: keypath.ClusterID()}})
+	resp, err := client.AllocID(c.ctx, &pdpb.AllocIDRequest{Header: &pdpb.RequestHeader{ClusterId: c.clusterID}})
 	if err != nil {
-		c.triggerMembershipCheck()
+		c.checkMembershipCh <- struct{}{}
 		return 0, err
 	}
 	return resp.GetId(), nil
@@ -242,17 +198,10 @@ func (c *Cluster) AllocID() (uint64, error) {
 func (c *Cluster) getAPIServerLeaderClient() (pdpb.PDClient, error) {
 	cli := c.apiServerLeader.Load()
 	if cli == nil {
-		c.triggerMembershipCheck()
+		c.checkMembershipCh <- struct{}{}
 		return nil, errors.New("API server leader is not found")
 	}
 	return cli.(pdpb.PDClient), nil
-}
-
-func (c *Cluster) triggerMembershipCheck() {
-	select {
-	case c.checkMembershipCh <- struct{}{}:
-	default: // avoid blocking
-	}
 }
 
 // SwitchAPIServerLeader switches the API server leader.
@@ -312,12 +261,11 @@ func (c *Cluster) updateScheduler() {
 		)
 		// Create the newly added schedulers.
 		for _, scheduler := range latestSchedulersConfig {
-			schedulerType := types.ConvertOldStrToType[scheduler.Type]
 			s, err := schedulers.CreateScheduler(
-				schedulerType,
+				scheduler.Type,
 				c.coordinator.GetOperatorController(),
 				c.storage,
-				schedulers.ConfigSliceDecoder(schedulerType, scheduler.Args),
+				schedulers.ConfigSliceDecoder(scheduler.Type, scheduler.Args),
 				schedulersController.RemoveScheduler,
 			)
 			if err != nil {
@@ -348,9 +296,8 @@ func (c *Cluster) updateScheduler() {
 		// Remove the deleted schedulers.
 		for _, name := range schedulersController.GetSchedulerNames() {
 			scheduler := schedulersController.GetScheduler(name)
-			oldType := types.SchedulerTypeCompatibleMap[scheduler.GetType()]
 			if slice.AnyOf(latestSchedulersConfig, func(i int) bool {
-				return latestSchedulersConfig[i].Type == oldType
+				return latestSchedulersConfig[i].Type == scheduler.GetType()
 			}) {
 				continue
 			}
@@ -408,10 +355,15 @@ func (c *Cluster) HandleStoreHeartbeat(heartbeat *schedulingpb.StoreHeartbeatReq
 	if store == nil {
 		return errors.Errorf("store %v not found", storeID)
 	}
-	statistics.UpdateStoreHeartbeatMetrics(store)
 
-	c.PutStore(store, core.SetStoreStats(stats), core.SetLastHeartbeatTS(time.Now()))
-	c.hotStat.Observe(storeID, stats)
+	nowTime := time.Now()
+	newStore := store.Clone(core.SetStoreStats(stats), core.SetLastHeartbeatTS(nowTime))
+
+	if store := c.GetStore(storeID); store != nil {
+		statistics.UpdateStoreHeartbeatMetrics(store)
+	}
+	c.PutStore(newStore)
+	c.hotStat.Observe(storeID, newStore.GetStoreStats())
 	c.hotStat.FilterUnhealthyStore(c)
 	reportInterval := stats.GetInterval()
 	interval := reportInterval.GetEndTimestamp() - reportInterval.GetStartTimestamp()
@@ -443,23 +395,12 @@ func (c *Cluster) HandleStoreHeartbeat(heartbeat *schedulingpb.StoreHeartbeatReq
 			utils.RegionWriteKeys:     0,
 			utils.RegionWriteQueryNum: 0,
 		}
-		checkReadPeerTask := func(cache *statistics.HotPeerCache) {
-			stats := cache.CheckPeerFlow(region, []*metapb.Peer{peer}, loads, interval)
-			for _, stat := range stats {
-				cache.UpdateStat(stat)
-			}
-		}
-		c.hotStat.CheckReadAsync(checkReadPeerTask)
+		peerInfo := core.NewPeerInfo(peer, loads, interval)
+		c.hotStat.CheckReadAsync(statistics.NewCheckPeerTask(peerInfo, region))
 	}
 
 	// Here we will compare the reported regions with the previous hot peers to decide if it is still hot.
-	collectUnReportedPeerTask := func(cache *statistics.HotPeerCache) {
-		stats := cache.CheckColdPeer(storeID, regions, interval)
-		for _, stat := range stats {
-			cache.UpdateStat(stat)
-		}
-	}
-	c.hotStat.CheckReadAsync(collectUnReportedPeerTask)
+	c.hotStat.CheckReadAsync(statistics.NewCollectUnReportedPeerTask(storeID, regions, interval))
 	return nil
 }
 
@@ -486,12 +427,7 @@ func (c *Cluster) runUpdateStoreStats() {
 func (c *Cluster) runCoordinator() {
 	defer logutil.LogPanic()
 	defer c.wg.Done()
-	// force wait for 1 minute to make prepare checker won't be directly skipped
-	runCollectWaitTime := collectWaitTime
-	failpoint.Inject("changeRunCollectWaitTime", func() {
-		runCollectWaitTime = 1 * time.Second
-	})
-	c.coordinator.RunUntilStop(runCollectWaitTime)
+	c.coordinator.RunUntilStop()
 }
 
 func (c *Cluster) runMetricsCollectionJob() {
@@ -505,7 +441,7 @@ func (c *Cluster) runMetricsCollectionJob() {
 		select {
 		case <-c.ctx.Done():
 			log.Info("metrics are reset")
-			resetMetrics()
+			c.resetMetrics()
 			log.Info("metrics collection job has been stopped")
 			return
 		case <-ticker.C:
@@ -519,12 +455,16 @@ func (c *Cluster) collectMetrics() {
 	stores := c.GetStores()
 	for _, s := range stores {
 		statsMap.Observe(s)
-		statistics.ObserveHotStat(s, c.hotStat.StoresStats)
+		statsMap.ObserveHotStat(s, c.hotStat.StoresStats)
 	}
 	statsMap.Collect()
 
 	c.coordinator.GetSchedulersController().CollectSchedulerMetrics()
 	c.coordinator.CollectHotSpotMetrics()
+	c.collectClusterMetrics()
+}
+
+func (c *Cluster) collectClusterMetrics() {
 	if c.regionStats == nil {
 		return
 	}
@@ -532,14 +472,24 @@ func (c *Cluster) collectMetrics() {
 	c.labelStats.Collect()
 	// collect hot cache metrics
 	c.hotStat.CollectMetrics()
-	// collect the lock metrics
-	c.CollectWaitLockMetrics()
 }
 
-func resetMetrics() {
+func (c *Cluster) resetMetrics() {
 	statistics.Reset()
+
 	schedulers.ResetSchedulerMetrics()
 	schedule.ResetHotSpotMetrics()
+	c.resetClusterMetrics()
+}
+
+func (c *Cluster) resetClusterMetrics() {
+	if c.regionStats == nil {
+		return
+	}
+	c.regionStats.Reset()
+	c.labelStats.Reset()
+	// reset hot cache metrics
+	c.hotStat.ResetMetrics()
 }
 
 // StartBackgroundJobs starts background jobs.
@@ -549,9 +499,6 @@ func (c *Cluster) StartBackgroundJobs() {
 	go c.runUpdateStoreStats()
 	go c.runCoordinator()
 	go c.runMetricsCollectionJob()
-	c.heartbeatRunner.Start(c.ctx)
-	c.miscRunner.Start(c.ctx)
-	c.logRunner.Start(c.ctx)
 	c.running.Store(true)
 }
 
@@ -562,143 +509,63 @@ func (c *Cluster) StopBackgroundJobs() {
 	}
 	c.running.Store(false)
 	c.coordinator.Stop()
-	c.heartbeatRunner.Stop()
-	c.miscRunner.Stop()
-	c.logRunner.Stop()
 	c.cancel()
 	c.wg.Wait()
 }
 
-// IsBackgroundJobsRunning returns whether the background jobs are running. Only for test purpose.
-func (c *Cluster) IsBackgroundJobsRunning() bool {
-	return c.running.Load()
-}
-
 // HandleRegionHeartbeat processes RegionInfo reports from client.
 func (c *Cluster) HandleRegionHeartbeat(region *core.RegionInfo) error {
-	tracer := core.NewNoopHeartbeatProcessTracer()
-	if c.persistConfig.GetScheduleConfig().EnableHeartbeatBreakdownMetrics {
-		tracer = core.NewHeartbeatProcessTracer()
-	}
-	var taskRunner, miscRunner, logRunner ratelimit.Runner
-	taskRunner, miscRunner, logRunner = syncRunner, syncRunner, syncRunner
-	if c.persistConfig.GetScheduleConfig().EnableHeartbeatConcurrentRunner {
-		taskRunner = c.heartbeatRunner
-		miscRunner = c.miscRunner
-		logRunner = c.logRunner
-	}
-	ctx := &core.MetaProcessContext{
-		Context:    c.ctx,
-		Tracer:     tracer,
-		TaskRunner: taskRunner,
-		MiscRunner: miscRunner,
-		LogRunner:  logRunner,
-	}
-	tracer.Begin()
-	if err := c.processRegionHeartbeat(ctx, region); err != nil {
-		tracer.OnAllStageFinished()
+	if err := c.processRegionHeartbeat(region); err != nil {
 		return err
 	}
-	tracer.OnAllStageFinished()
+
 	c.coordinator.GetOperatorController().Dispatch(region, operator.DispatchFromHeartBeat, c.coordinator.RecordOpStepWithTTL)
 	return nil
 }
 
 // processRegionHeartbeat updates the region information.
-func (c *Cluster) processRegionHeartbeat(ctx *core.MetaProcessContext, region *core.RegionInfo) error {
-	tracer := ctx.Tracer
+func (c *Cluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	origin, _, err := c.PreCheckPutRegion(region)
-	tracer.OnPreCheckFinished()
 	if err != nil {
 		return err
 	}
 	region.Inherit(origin, c.GetStoreConfig().IsEnableRegionBucket())
+
 	cluster.HandleStatsAsync(c, region)
-	tracer.OnAsyncHotStatsFinished()
+
 	hasRegionStats := c.regionStats != nil
 	// Save to storage if meta is updated, except for flashback.
 	// Save to cache if meta or leader is updated, or contains any down/pending peer.
-	_, saveCache, _, retained := core.GenerateRegionGuideFunc(true)(ctx, region, origin)
-	regionID := region.GetID()
+	_, saveCache, _ := core.GenerateRegionGuideFunc(true)(region, origin)
 	if !saveCache {
 		// Due to some config changes need to update the region stats as well,
 		// so we do some extra checks here.
 		if hasRegionStats && c.regionStats.RegionStatsNeedUpdate(region) {
-			ctx.TaskRunner.RunTask(
-				regionID,
-				ratelimit.ObserveRegionStatsAsync,
-				func(ctx context.Context) {
-					cluster.Collect(ctx, c, region)
-				},
-			)
-		}
-		// region is not updated to the subtree.
-		if origin.GetRef() < 2 {
-			ctx.TaskRunner.RunTask(
-				regionID,
-				ratelimit.UpdateSubTree,
-				func(context.Context) {
-					c.CheckAndPutSubTree(region)
-				},
-				ratelimit.WithRetained(true),
-			)
+			c.regionStats.Observe(region, c.GetRegionStores(region))
 		}
 		return nil
 	}
-	tracer.OnSaveCacheBegin()
+
 	var overlaps []*core.RegionInfo
 	if saveCache {
 		// To prevent a concurrent heartbeat of another region from overriding the up-to-date region info by a stale one,
 		// check its validation again here.
 		//
 		// However, it can't solve the race condition of concurrent heartbeats from the same region.
-
-		// Async task in next PR.
-		if overlaps, err = c.CheckAndPutRootTree(ctx, region); err != nil {
-			tracer.OnSaveCacheFinished()
+		if overlaps, err = c.AtomicCheckAndPutRegion(region); err != nil {
 			return err
 		}
-		ctx.TaskRunner.RunTask(
-			regionID,
-			ratelimit.UpdateSubTree,
-			func(context.Context) {
-				c.CheckAndPutSubTree(region)
-			},
-			ratelimit.WithRetained(retained),
-		)
-		tracer.OnUpdateSubTreeFinished()
-		ctx.TaskRunner.RunTask(
-			regionID,
-			ratelimit.HandleOverlaps,
-			func(ctx context.Context) {
-				cluster.HandleOverlaps(ctx, c, overlaps)
-			},
-		)
-	}
-	tracer.OnSaveCacheFinished()
-	if hasRegionStats {
-		// handle region stats
-		ctx.TaskRunner.RunTask(
-			regionID,
-			ratelimit.CollectRegionStatsAsync,
-			func(ctx context.Context) {
-				cluster.Collect(ctx, c, region)
-			},
-		)
+
+		cluster.HandleOverlaps(c, overlaps)
 	}
 
-	tracer.OnCollectRegionStatsFinished()
+	cluster.Collect(c, region, c.GetRegionStores(region), hasRegionStats)
 	return nil
 }
 
 // IsPrepared return true if the prepare checker is ready.
 func (c *Cluster) IsPrepared() bool {
 	return c.coordinator.GetPrepareChecker().IsPrepared()
-}
-
-// SetPrepared set the prepare check to prepared. Only for test purpose.
-func (c *Cluster) SetPrepared() {
-	c.coordinator.GetPrepareChecker().SetPrepared()
 }
 
 // IsSchedulingHalted returns whether the scheduling is halted.

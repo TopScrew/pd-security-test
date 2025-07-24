@@ -34,7 +34,7 @@ import (
 func TestLoadRegion(t *testing.T) {
 	re := require.New(t)
 	tempDir := t.TempDir()
-	rs, err := storage.NewRegionStorageWithLevelDBBackend(context.Background(), tempDir, nil)
+	rs, err := storage.NewStorageWithLevelDBBackend(context.Background(), tempDir, nil)
 	re.NoError(err)
 
 	server := mockserver.NewMockServer(
@@ -44,7 +44,7 @@ func TestLoadRegion(t *testing.T) {
 		storage.NewCoreStorage(storage.NewStorageWithMemoryBackend(), rs),
 		core.NewBasicCluster(),
 	)
-	for i := range 30 {
+	for i := 0; i < 30; i++ {
 		rs.SaveRegion(&metapb.Region{Id: uint64(i) + 1})
 	}
 	re.NoError(failpoint.Enable("github.com/tikv/pd/pkg/storage/endpoint/slowLoadRegion", "return(true)"))
@@ -64,7 +64,7 @@ func TestLoadRegion(t *testing.T) {
 func TestErrorCode(t *testing.T) {
 	re := require.New(t)
 	tempDir := t.TempDir()
-	rs, err := storage.NewRegionStorageWithLevelDBBackend(context.Background(), tempDir, nil)
+	rs, err := storage.NewStorageWithLevelDBBackend(context.Background(), tempDir, nil)
 	re.NoError(err)
 	server := mockserver.NewMockServer(
 		context.Background(),
